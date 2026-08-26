@@ -95,6 +95,8 @@ video,canvas{width:100%;border-radius:12px;background:#000}
 .list-row .info b{font-weight:700}
 .list-row .sub{font-size:11px;color:var(--muted)}
 .btn-del{background:#fdecea;color:var(--erro);border:none;border-radius:7px;padding:6px 10px;font-size:12px;cursor:pointer}
+.btn-sm{background:var(--verde);color:#fff;border:none;border-radius:7px;padding:8px 14px;font-size:13px;font-weight:600;cursor:pointer}
+.btn-sm.ghost{background:var(--areia);color:var(--verde-esc);border:1.5px solid var(--borda)}
 .toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%) translateY(20px);background:var(--verde-esc);
   color:#fff;padding:11px 18px;border-radius:10px;font-size:13px;opacity:0;pointer-events:none;transition:.25s;z-index:80;
   max-width:90vw;text-align:center}
@@ -1212,6 +1214,7 @@ async function definirResponsavel(turno,taskId,email){
   await carregarResponsaveisGer(); // atualiza o painel de carga e o "essa semana" na hora
 }
 
+let editingColabKey=null;
 async function carregarColaboradoresGer(){
   const con=document.getElementById('colab-lista');
   con.innerHTML='<p style="color:var(--muted);font-size:13px">Carregando...</p>';
@@ -1219,15 +1222,70 @@ async function carregarColaboradoresGer(){
   if(!snap.exists()){ con.innerHTML='<p style="color:var(--muted);font-size:13px">Nenhum colaborador cadastrado.</p>'; return; }
   const dados=snap.val();
   const filtro=document.getElementById('colab-filtro-unidade').value;
-  const keys=Object.keys(dados).filter(k=>!filtro || dados[k].unidade===filtro);
+  const keys=Object.keys(dados).filter(k=>!filtro || (dados[k]&&dados[k].unidade)===filtro);
   if(!keys.length){ con.innerHTML='<p style="color:var(--muted);font-size:13px">Nenhum colaborador cadastrado nessa unidade.</p>'; return; }
   con.innerHTML=keys.map(k=>{
-    const c=dados[k];
+    const cRaw=dados[k];
+    const c=(cRaw && typeof cRaw==='object')?cRaw:{}; // registros antigos podem ser só "true"
+    if(editingColabKey===k){
+      return `<div class="list-row" style="flex-direction:column;align-items:stretch;gap:8px">
+        <div class="fld" style="margin:0"><label>Nome</label><input type="text" id="edit-colab-nome-${k}" value="${(c.nome||'').replace(/"/g,'&quot;')}"></div>
+        <div class="fld" style="margin:0"><label>E-mail (conta Google)</label><input type="email" id="edit-colab-email-${k}" value="${(c.email||keyParaEmail(k)).replace(/"/g,'&quot;')}"></div>
+        <div class="fld" style="margin:0"><label>Unidade</label>
+          <select id="edit-colab-unidade-${k}">
+            <option value="CALI CRAVINGS"${c.unidade==='CALI CRAVINGS'?' selected':''}>Cali Cravings</option>
+            <option value="TEXAS COUNTRY BAR"${c.unidade==='TEXAS COUNTRY BAR'?' selected':''}>Texas Country Bar</option>
+          </select>
+        </div>
+        <label style="display:flex;align-items:center;gap:6px;font-size:13px"><input type="checkbox" id="edit-colab-gestor-${k}" ${c.gestor?'checked':''}> Também é gestor</label>
+        <div style="display:flex;gap:8px">
+          <button class="btn-sm" onclick="salvarEdicaoColaborador('${k}')">Salvar</button>
+          <button class="btn-sm ghost" onclick="cancelarEdicaoColaborador()">Cancelar</button>
+        </div>
+      </div>`;
+    }
     return `<div class="list-row">
       <div class="info"><b>${c.nome||keyParaEmail(k)}</b><div class="sub">${c.unidade||'sem unidade'}${c.gestor?' · gestor':''}</div></div>
-      <button class="btn-del" onclick="removerColaborador('${k}')">🗑️</button>
+      <div style="display:flex;gap:6px">
+        <button class="btn-del" onclick="editarColaborador('${k}')" title="Editar">✏️</button>
+        <button class="btn-del" onclick="removerColaborador('${k}')" title="Remover">🗑️</button>
+      </div>
     </div>`;
   }).join('');
+}
+function editarColaborador(key){
+  editingColabKey=key;
+  carregarColaboradoresGer();
+}
+function cancelarEdicaoColaborador(){
+  editingColabKey=null;
+  carregarColaboradoresGer();
+}
+async function salvarEdicaoColaborador(key){
+  const nome=document.getElementById('edit-colab-nome-'+key).value.trim();
+  const email=document.getElementById('edit-colab-email-'+key).value.trim().toLowerCase();
+  const unidade=document.getElementById('edit-colab-unidade-'+key).value;
+  const gestor=document.getElementById('edit-colab-gestor-'+key).checked;
+  if(!nome || !email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)){
+    showToast('⚠️ Preencha nome e um e-mail válido.');
+    return;
+  }
+  const newKey=emailKey(email);
+  const snapAntigo=await db.ref('/colaboradores_autorizados/'+key).get();
+  const antigo=snapAntigo.val();
+  const criadoEm=(antigo && typeof antigo==='object' && antigo.criadoEm) || Date.now();
+  const dadosNovos={nome, email, unidade, gestor, ativo:true, criadoEm};
+  if(newKey===key){
+    // e-mail não mudou — .update() também corrige registros antigos que eram só "true" em vez de objeto
+    await db.ref('/colaboradores_autorizados/'+key).update(dadosNovos);
+  } else {
+    // e-mail mudou — a chave no banco é derivada do e-mail, então move pra chave nova e remove a antiga
+    await db.ref('/colaboradores_autorizados/'+newKey).set(dadosNovos);
+    await db.ref('/colaboradores_autorizados/'+key).remove();
+  }
+  editingColabKey=null;
+  showToast('✅ Colaborador atualizado!');
+  await carregarColaboradoresGer();
 }
 async function adicionarColaborador(){
   const nome=document.getElementById('colab-novo-nome').value.trim();
