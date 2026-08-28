@@ -657,6 +657,8 @@ async function carregarChecklist(){
 
 function responsavelDaTarefa(id){
   const t=tarefasCache[id];
+  // tarefa pausada manualmente pela gestão: fica sem responsável até alguém trocar de novo
+  if(responsaveisCache[id] && responsaveisCache[id].pausada) return null;
   const base=responsaveisCache[id] || responsavelAutomatico(colabsAtivosCache,turnoSel,(t&&t.ordem)||0);
   if(!base) return base;
   // se a pessoa que assumiria a tarefa está de folga hoje nesse turno, a tarefa
@@ -1205,6 +1207,8 @@ function calcularCargaTarefas(colabs,tarefasDia,tarefasNoite,resp){
   function contar(turno,tarefas){
     Object.keys(tarefas).forEach(id=>{
       const atual=(resp[turno]||{})[id];
+      if(atual && atual.pausada) return; // tarefa pausada não entra na carga de ninguém
+      if(atual && atual.pausada) return; // tarefa pausada não entra na carga de ninguém
       const responsavel=atual||responsavelAutomatico(colabs,turno,tarefas[id].ordem||0);
       if(!responsavel) return;
       if(!carga[responsavel.email]) carga[responsavel.email]={email:responsavel.email,nome:responsavel.nome,dia:0,noite:0};
@@ -1253,7 +1257,7 @@ async function carregarResponsaveisGer(){
   const filtroEmail=filtroSel.value;
 
   let html=`<div style="background:#eef7f0;border:1px solid #cfe9d6;border-radius:9px;padding:9px 11px;font-size:12px;color:var(--verde-esc);margin-bottom:10px">
-    🔁 <b>Rodízio automático ativo</b> — quando ninguém fica fixo numa tarefa, o sistema troca sozinho o responsável a cada 7 dias entre os colaboradores ativos da unidade. Selecionar um nome trava a tarefa pra essa pessoa até você tirar.
+    🔁 <b>Rodízio automático ativo</b> — quando ninguém fica fixo numa tarefa, o sistema troca sozinho o responsável a cada 7 dias entre os colaboradores ativos da unidade. Selecionar um nome trava a tarefa pra essa pessoa até você tirar. Selecionar <b>⏸️ Ninguém</b> pausa a tarefa (some do checklist de todo mundo) até você escolher outra opção.
   </div>`;
   let totalFiltrado=0;
   ['dia','noite'].forEach(turno=>{
@@ -1262,8 +1266,9 @@ async function carregarResponsaveisGer(){
     let htmlTurno='';
     ids.forEach(id=>{
       const atual=(resp[turno]||{})[id];
+      const pausada=!!(atual && atual.pausada);
       const auto=responsavelAutomatico(colabs,turno,tarefas[id].ordem||0);
-      const donoAtual=atual||auto;
+      const donoAtual=pausada?null:(atual||auto);
       const folga=donoAtual?folgasPorTurno[turno][emailKey(donoAtual.email)]:null;
       const donoEfetivo=folga?{email:folga.substitutoEmail,nome:folga.substitutoNome}:donoAtual;
       if(filtroEmail && (!donoEfetivo || donoEfetivo.email!==filtroEmail)) return;
@@ -1275,6 +1280,7 @@ async function carregarResponsaveisGer(){
         </div>
         <select style="padding:6px;border-radius:7px;border:1px solid var(--borda)" onchange="definirResponsavel('${turno}','${id}',this.value)">
           <option value="">🔁 Rodízio automático</option>
+          <option value="__PAUSADA__" ${pausada?'selected':''}>⏸️ Ninguém (pausar tarefa)</option>
           ${colabs.map(c=>`<option value="${c.email}" ${atual&&atual.email===c.email?'selected':''}>${c.nome} (fixo)</option>`).join('')}
         </select>
       </div>`;
@@ -1291,6 +1297,10 @@ async function carregarResponsaveisGer(){
 async function definirResponsavel(turno,taskId,email){
   const uk=unidadeKey(unidadeAtiva);
   if(!email){ await db.ref('/responsaveis/'+uk+'/'+turno+'/'+taskId).remove(); }
+  else if(email==='__PAUSADA__'){
+    await db.ref('/responsaveis/'+uk+'/'+turno+'/'+taskId).set({pausada:true,inicio:hojeISO()});
+    showToast('⏸️ Tarefa pausada — ninguém vai vê-la até você trocar de novo.');
+  }
   else{
     const nome=(await db.ref('/colaboradores_autorizados/'+emailKey(email)).get()).val()?.nome||email;
     await db.ref('/responsaveis/'+uk+'/'+turno+'/'+taskId).set({email,nome,inicio:hojeISO()});
