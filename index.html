@@ -279,6 +279,12 @@ video,canvas{width:100%;border-radius:12px;background:#000}
       </div>
       <div class="card">
         <p style="font-size:12.5px;color:var(--muted);margin-bottom:10px">Defina quem é responsável por cada tarefa e por quanto tempo.</p>
+        <div class="fld" style="margin-bottom:10px">
+          <label>Filtrar por colaborador</label>
+          <select id="resp-filtro-colab" onchange="carregarResponsaveisGer()">
+            <option value="">Todos os colaboradores</option>
+          </select>
+        </div>
         <div id="ger-resp-lista"></div>
       </div>
     </div>
@@ -1237,19 +1243,32 @@ async function carregarResponsaveisGer(){
   const tarefasNoite=tSnapNoite.val()||{};
   const folgasPorTurno={dia:fSnapDia.val()||{}, noite:fSnapNoite.val()||{}};
   document.getElementById('ger-carga-lista').innerHTML=renderCargaTarefasHtml(calcularCargaTarefas(colabs,tarefasDia,tarefasNoite,resp));
+
+  // popular o filtro de colaborador sem perder a seleção atual
+  const filtroSel=document.getElementById('resp-filtro-colab');
+  const filtroAtual=filtroSel.value;
+  filtroSel.innerHTML='<option value="">Todos os colaboradores</option>'+
+    colabs.slice().sort((a,b)=>a.nome.localeCompare(b.nome,'pt-BR')).map(c=>`<option value="${c.email}">${c.nome}</option>`).join('');
+  filtroSel.value=filtroAtual;
+  const filtroEmail=filtroSel.value;
+
   let html=`<div style="background:#eef7f0;border:1px solid #cfe9d6;border-radius:9px;padding:9px 11px;font-size:12px;color:var(--verde-esc);margin-bottom:10px">
     🔁 <b>Rodízio automático ativo</b> — quando ninguém fica fixo numa tarefa, o sistema troca sozinho o responsável a cada 7 dias entre os colaboradores ativos da unidade. Selecionar um nome trava a tarefa pra essa pessoa até você tirar.
   </div>`;
+  let totalFiltrado=0;
   ['dia','noite'].forEach(turno=>{
     const tarefas=turno==='dia'?tarefasDia:tarefasNoite;
     const ids=Object.keys(tarefas).sort((a,b)=>(tarefas[a].ordem||0)-(tarefas[b].ordem||0));
-    html+=`<div style="font-weight:700;font-size:12.5px;margin:10px 0 4px;color:var(--muted);text-transform:uppercase">${turno==='dia'?'☀️ Dia':'🌙 Noite'}</div>`;
+    let htmlTurno='';
     ids.forEach(id=>{
       const atual=(resp[turno]||{})[id];
       const auto=responsavelAutomatico(colabs,turno,tarefas[id].ordem||0);
       const donoAtual=atual||auto;
       const folga=donoAtual?folgasPorTurno[turno][emailKey(donoAtual.email)]:null;
-      html+=`<div class="list-row">
+      const donoEfetivo=folga?{email:folga.substitutoEmail,nome:folga.substitutoNome}:donoAtual;
+      if(filtroEmail && (!donoEfetivo || donoEfetivo.email!==filtroEmail)) return;
+      totalFiltrado++;
+      htmlTurno+=`<div class="list-row">
         <div class="info" style="flex:1"><b>${tarefas[id].nome}</b>
           ${!atual && auto?`<div class="sub">🔁 essa semana: ${auto.nome}</div>`:''}
           ${folga?`<div class="sub" style="color:#b5860a">🏖️ hoje: ${folga.nome} de folga → ${folga.substitutoNome} assume</div>`:''}
@@ -1260,7 +1279,13 @@ async function carregarResponsaveisGer(){
         </select>
       </div>`;
     });
+    if(htmlTurno){
+      html+=`<div style="font-weight:700;font-size:12.5px;margin:10px 0 4px;color:var(--muted);text-transform:uppercase">${turno==='dia'?'☀️ Dia':'🌙 Noite'}</div>`+htmlTurno;
+    }
   });
+  if(filtroEmail && totalFiltrado===0){
+    html+='<p style="color:var(--muted);font-size:13px">Nenhuma tarefa está com esse colaborador hoje.</p>';
+  }
   con.innerHTML=html;
 }
 async function definirResponsavel(turno,taskId,email){
