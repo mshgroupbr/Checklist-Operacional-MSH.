@@ -161,6 +161,7 @@ video,canvas{width:100%;border-radius:12px;background:#000}
     <div class="card">
       <div class="rank-title">🏆 Ranking — melhores pontuadores</div>
       <div id="rank-lista"><p style="color:var(--muted);font-size:13px">Carregando...</p></div>
+      <button class="btn btn-primary" id="btn-rank-ver-todos" style="width:100%;margin-top:8px;justify-content:center;display:none;box-shadow:0 2px 6px rgba(44,62,53,.25)" onclick="toggleRankingCompleto()">Ver equipe completa ▾</button>
     </div>
 
     <div class="card">
@@ -252,6 +253,7 @@ video,canvas{width:100%;border-radius:12px;background:#000}
       <button class="tab-btn" onclick="abrirTabGestao('historico')" id="tabbtn-historico">Histórico</button>
       <button class="tab-btn" onclick="abrirTabGestao('pontos')" id="tabbtn-pontos">Pontos</button>
       <button class="tab-btn" onclick="abrirTabGestao('problemas')" id="tabbtn-problemas">Problemas</button>
+      <button class="tab-btn" onclick="abrirTabGestao('folgas')" id="tabbtn-folgas">Folgas</button>
     </div>
 
     <div class="tab-pane on" id="tabpane-tarefas">
@@ -352,6 +354,25 @@ video,canvas{width:100%;border-radius:12px;background:#000}
           <input type="checkbox" id="chk-mostrar-resolvidos" onchange="carregarProblemasGer()"> Mostrar também os resolvidos
         </label>
         <div id="problemas-lista"><p style="color:var(--muted);font-size:13px">Carregando...</p></div>
+      </div>
+    </div>
+
+    <div class="tab-pane" id="tabpane-folgas">
+      <div class="card">
+        <div class="fld" style="margin-bottom:0">
+          <label>📅 Dia</label>
+          <input type="date" id="folga-data" onchange="carregarFolgasGer()">
+        </div>
+      </div>
+      <div class="card">
+        <div style="font-weight:700;font-size:12.5px;margin-bottom:8px;color:var(--muted);text-transform:uppercase">☀️ Folga — Turno Dia</div>
+        <div id="folga-lista-dia"></div>
+        <button class="btn btn-outline" style="width:100%;margin-top:8px;justify-content:center" onclick="adicionarSlotFolga('dia')">+ Adicionar colaborador de folga</button>
+      </div>
+      <div class="card">
+        <div style="font-weight:700;font-size:12.5px;margin-bottom:8px;color:var(--muted);text-transform:uppercase">🌙 Folga — Turno Noite</div>
+        <div id="folga-lista-noite"></div>
+        <button class="btn btn-outline" style="width:100%;margin-top:8px;justify-content:center" onclick="adicionarSlotFolga('noite')">+ Adicionar colaborador de folga</button>
       </div>
     </div>
   </div>
@@ -481,6 +502,7 @@ let validacoesCache={};   // {emailKey:{email,nome,timestamp,selfie,lat,lng}} �
                            // (cada colaborador valida só as próprias tarefas, não o turno inteiro do restaurante)
 let responsaveisCache={}; // {taskId:{email,nome,...}} — fixos definidos manualmente pelo gestor
 let colabsAtivosCache=[]; // colaboradores ativos da unidade ativa, p/ calcular o rodízio automático
+let folgasCache={};       // {emailKeyDeQuemFolgou:{email,nome,substitutoEmail,substitutoNome}} — turno/dia atual
 let verTudo=false;        // gestor pode alternar entre "minhas tarefas" e ver o checklist inteiro
 let _fotoBase64=null;
 let _geoOk=false,_geoLat=null,_geoLng=null;
@@ -604,18 +626,21 @@ async function carregarChecklist(){
   const uk=unidadeKey(unidadeAtiva);
   const con=document.getElementById('checklist-lista');
   con.innerHTML='<p style="color:var(--muted);font-size:13px">Carregando...</p>';
-  const [tSnap,eSnap,vSnap,rSnap,cSnap]=await Promise.all([
+  const [tSnap,eSnap,vSnap,rSnap,cSnap,fSnap]=await Promise.all([
     db.ref('/tarefas/'+uk+'/'+turnoSel).get(),
     db.ref('/execucoes/'+uk+'/'+dataOperacional()+'/'+turnoSel).get(),
     db.ref('/validacoes/'+uk+'/'+dataOperacional()+'/'+turnoSel).get(),
     db.ref('/responsaveis/'+uk+'/'+turnoSel).get(),
-    db.ref('/colaboradores_autorizados').get()
+    db.ref('/colaboradores_autorizados').get(),
+    db.ref('/folgas/'+uk+'/'+dataOperacional()+'/'+turnoSel).get()
   ]);
   await carregarConfigPontos(); // garante que PTS_BONUS_PRAZO/PTS_BONUS_TURNO estao atualizados pra unidade ativa, pra qualquer colaborador (nao so gestor)
   tarefasCache=tSnap.exists()?tSnap.val():{};
   execucoesCache=eSnap.exists()?eSnap.val():{};
   validacoesCache=vSnap.exists()?vSnap.val():{};
   responsaveisCache=rSnap.exists()?rSnap.val():{};
+  // folgas do turno/dia atual: chave = e-mail (formato ,) de quem está de folga
+  folgasCache=fSnap.exists()?fSnap.val():{};
   const elDataOp=document.getElementById('data-operacao');
   if(elDataOp) elDataOp.textContent='📅 Operação de '+formatarDataBR(dataOperacional());
   colabsAtivosCache=cSnap.exists()?Object.values(cSnap.val()).filter(c=>c.unidade===unidadeAtiva && c.ativo!==false):[];
@@ -626,7 +651,15 @@ async function carregarChecklist(){
 
 function responsavelDaTarefa(id){
   const t=tarefasCache[id];
-  return responsaveisCache[id] || responsavelAutomatico(colabsAtivosCache,turnoSel,(t&&t.ordem)||0);
+  const base=responsaveisCache[id] || responsavelAutomatico(colabsAtivosCache,turnoSel,(t&&t.ordem)||0);
+  if(!base) return base;
+  // se a pessoa que assumiria a tarefa está de folga hoje nesse turno, a tarefa
+  // vai inteira pro substituto escolhido em Gestão → Folgas
+  const folga=folgasCache[emailKey(base.email)];
+  if(folga && folga.substitutoEmail){
+    return {email:folga.substitutoEmail, nome:folga.substitutoNome};
+  }
+  return base;
 }
 // Uma tarefa fica travada quando a PESSOA responsável por ela já validou as
 // próprias tarefas — não quando o turno inteiro do restaurante termina.
@@ -786,21 +819,36 @@ async function toggleTarefa(taskId){
 }
 
 /* ── RANKING ──────────────────────────────────── */
+let rankCompletoCache=[];
+let rankExpandido=false;
 async function carregarRanking(){
   const uk=unidadeKey(unidadeAtiva);
   const con=document.getElementById('rank-lista');
+  const btnTodos=document.getElementById('btn-rank-ver-todos');
   try{
     const snap=await db.ref('/pontuacao/'+uk).get();
-    if(!snap.exists()){ con.innerHTML='<p style="color:var(--muted);font-size:13px">Ninguém pontuou ainda.</p>'; return; }
+    if(!snap.exists()){ con.innerHTML='<p style="color:var(--muted);font-size:13px">Ninguém pontuou ainda.</p>'; if(btnTodos) btnTodos.style.display='none'; return; }
     const dados=snap.val();
-    const lista=Object.keys(dados).map(k=>({nome:dados[k].nome,total:dados[k].total||0})).sort((a,b)=>b.total-a.total).slice(0,5);
-    con.innerHTML=lista.map((p,i)=>`
-      <div class="rank-row${i===0?' p1':''}">
-        <div class="rank-pos">${i+1}º</div>
-        <div class="rank-nome">${p.nome}</div>
-        <div class="rank-pts">${p.total} pts</div>
-      </div>`).join('');
+    rankCompletoCache=Object.keys(dados).map(k=>({nome:dados[k].nome,total:dados[k].total||0})).sort((a,b)=>b.total-a.total);
+    if(btnTodos) btnTodos.style.display = rankCompletoCache.length>5 ? 'flex' : 'none';
+    desenharRanking();
   }catch(err){ con.innerHTML='<p style="color:var(--muted);font-size:13px">Erro ao carregar ranking.</p>'; }
+}
+function desenharRanking(){
+  const con=document.getElementById('rank-lista');
+  const lista = rankExpandido ? rankCompletoCache : rankCompletoCache.slice(0,5);
+  con.innerHTML=lista.map((p,i)=>`
+    <div class="rank-row${i===0?' p1':''}">
+      <div class="rank-pos">${i+1}º</div>
+      <div class="rank-nome">${p.nome}</div>
+      <div class="rank-pts">${p.total} pts</div>
+    </div>`).join('');
+}
+function toggleRankingCompleto(){
+  rankExpandido=!rankExpandido;
+  const btnTodos=document.getElementById('btn-rank-ver-todos');
+  if(btnTodos) btnTodos.textContent = rankExpandido ? 'Ver menos ▴' : 'Ver equipe completa ▾';
+  desenharRanking();
 }
 
 /* ── VALIDAR MINHAS TAREFAS (geolocalização + selfie, uma vez, no final) ─── */
@@ -1065,6 +1113,12 @@ function abrirTabGestao(tab){
     carregarRankingGer();
   }
   if(tab==='problemas') carregarProblemasGer();
+  if(tab==='folgas'){
+    const inp=document.getElementById('folga-data');
+    if(!inp.value) inp.value=dataOperacional();
+    folgaExtras={dia:0,noite:0};
+    carregarFolgasGer();
+  }
 }
 
 async function gerSelecionarTurno(turno){
@@ -1171,14 +1225,17 @@ function renderCargaTarefasHtml(lista){
 async function carregarResponsaveisGer(){
   const uk=unidadeKey(unidadeAtiva);
   const con=document.getElementById('ger-resp-lista');
-  const [tSnapDia,tSnapNoite,rSnap,cSnap]=await Promise.all([
+  const [tSnapDia,tSnapNoite,rSnap,cSnap,fSnapDia,fSnapNoite]=await Promise.all([
     db.ref('/tarefas/'+uk+'/dia').get(), db.ref('/tarefas/'+uk+'/noite').get(),
-    db.ref('/responsaveis/'+uk).get(), db.ref('/colaboradores_autorizados').get()
+    db.ref('/responsaveis/'+uk).get(), db.ref('/colaboradores_autorizados').get(),
+    db.ref('/folgas/'+uk+'/'+dataOperacional()+'/dia').get(),
+    db.ref('/folgas/'+uk+'/'+dataOperacional()+'/noite').get()
   ]);
   const colabs=cSnap.exists()?Object.values(cSnap.val()).filter(c=>c.unidade===unidadeAtiva && c.ativo!==false):[];
   const resp=rSnap.exists()?rSnap.val():{};
   const tarefasDia=tSnapDia.val()||{};
   const tarefasNoite=tSnapNoite.val()||{};
+  const folgasPorTurno={dia:fSnapDia.val()||{}, noite:fSnapNoite.val()||{}};
   document.getElementById('ger-carga-lista').innerHTML=renderCargaTarefasHtml(calcularCargaTarefas(colabs,tarefasDia,tarefasNoite,resp));
   let html=`<div style="background:#eef7f0;border:1px solid #cfe9d6;border-radius:9px;padding:9px 11px;font-size:12px;color:var(--verde-esc);margin-bottom:10px">
     🔁 <b>Rodízio automático ativo</b> — quando ninguém fica fixo numa tarefa, o sistema troca sozinho o responsável a cada 7 dias entre os colaboradores ativos da unidade. Selecionar um nome trava a tarefa pra essa pessoa até você tirar.
@@ -1190,9 +1247,12 @@ async function carregarResponsaveisGer(){
     ids.forEach(id=>{
       const atual=(resp[turno]||{})[id];
       const auto=responsavelAutomatico(colabs,turno,tarefas[id].ordem||0);
+      const donoAtual=atual||auto;
+      const folga=donoAtual?folgasPorTurno[turno][emailKey(donoAtual.email)]:null;
       html+=`<div class="list-row">
         <div class="info" style="flex:1"><b>${tarefas[id].nome}</b>
           ${!atual && auto?`<div class="sub">🔁 essa semana: ${auto.nome}</div>`:''}
+          ${folga?`<div class="sub" style="color:#b5860a">🏖️ hoje: ${folga.nome} de folga → ${folga.substitutoNome} assume</div>`:''}
         </div>
         <select style="padding:6px;border-radius:7px;border:1px solid var(--borda)" onchange="definirResponsavel('${turno}','${id}',this.value)">
           <option value="">🔁 Rodízio automático</option>
@@ -1311,6 +1371,94 @@ async function removerColaborador(key){
   await db.ref('/colaboradores_autorizados/'+key).remove();
   await carregarColaboradoresGer();
   showToast('✅ Acesso removido.');
+}
+
+/* ── GESTÃO: FOLGAS (remanejamento de tarefas pra um substituto específico) ── */
+let folgaExtras={dia:0,noite:0};
+let folgaColabsCache=[];
+async function carregarFolgasGer(){
+  const uk=unidadeKey(unidadeAtiva);
+  const data=document.getElementById('folga-data').value || dataOperacional();
+  const [cSnap,fSnap]=await Promise.all([
+    db.ref('/colaboradores_autorizados').get(),
+    db.ref('/folgas/'+uk+'/'+data).get()
+  ]);
+  folgaColabsCache=cSnap.exists()?Object.values(cSnap.val()).filter(c=>c && typeof c==='object' && c.unidade===unidadeAtiva && c.ativo!==false):[];
+  const folgas=fSnap.exists()?fSnap.val():{};
+  renderFolgaSecao('dia', folgas.dia||{});
+  renderFolgaSecao('noite', folgas.noite||{});
+}
+function renderFolgaSecao(turno, entradasObj){
+  const con=document.getElementById('folga-lista-'+turno);
+  if(!folgaColabsCache.length){ con.innerHTML='<p style="color:var(--muted);font-size:13px">Nenhum colaborador ativo cadastrado nessa unidade.</p>'; return; }
+  const keys=Object.keys(entradasObj);
+  const totalSlots=Math.max(3,keys.length)+(folgaExtras[turno]||0);
+  let html='';
+  keys.forEach(k=>{ html+=linhaFolgaHtml(turno,k,entradasObj[k]); });
+  for(let i=keys.length;i<totalSlots;i++){ html+=linhaFolgaHtml(turno,'',null); }
+  con.innerHTML=html;
+}
+function linhaFolgaHtml(turno,colabKey,entrada){
+  const colabAtualEmail=entrada?entrada.email:'';
+  const subAtualEmail=entrada?entrada.substitutoEmail:'';
+  return `<div class="list-row" style="flex-wrap:wrap;gap:8px" data-key="${colabKey||''}">
+    <div class="fld" style="margin:0;flex:1;min-width:140px">
+      <label style="font-size:11px">De folga</label>
+      <select onchange="onMudaFolgaSlot('${turno}',this)">
+        <option value="">Selecionar...</option>
+        ${folgaColabsCache.map(c=>`<option value="${c.email}" ${c.email===colabAtualEmail?'selected':''}>${c.nome}</option>`).join('')}
+      </select>
+    </div>
+    <div class="fld" style="margin:0;flex:1;min-width:140px">
+      <label style="font-size:11px">Substituto</label>
+      <select onchange="onMudaFolgaSlot('${turno}',this)">
+        <option value="">Selecionar...</option>
+        ${folgaColabsCache.map(c=>`<option value="${c.email}" ${c.email===subAtualEmail?'selected':''}>${c.nome}</option>`).join('')}
+      </select>
+    </div>
+    ${colabKey?`<button class="btn-del" onclick="removerFolga('${turno}','${colabKey}')" title="Remover">🗑️</button>`:''}
+  </div>`;
+}
+async function onMudaFolgaSlot(turno,selectEl){
+  const row=selectEl.closest('.list-row');
+  const selects=row.querySelectorAll('select');
+  const colabEmail=selects[0].value;
+  const subEmail=selects[1].value;
+  const originalKey=row.getAttribute('data-key')||'';
+  const uk=unidadeKey(unidadeAtiva);
+  const data=document.getElementById('folga-data').value || dataOperacional();
+  if(colabEmail && subEmail){
+    if(colabEmail===subEmail){ showToast('⚠️ O substituto não pode ser a mesma pessoa.'); return; }
+    const newKey=emailKey(colabEmail);
+    const colabObj=folgaColabsCache.find(c=>c.email===colabEmail);
+    const subObj=folgaColabsCache.find(c=>c.email===subEmail);
+    if(originalKey && originalKey!==newKey){
+      await db.ref('/folgas/'+uk+'/'+data+'/'+turno+'/'+originalKey).remove();
+    }
+    await db.ref('/folgas/'+uk+'/'+data+'/'+turno+'/'+newKey).set({
+      nome: colabObj?colabObj.nome:colabEmail, email: colabEmail,
+      substitutoEmail: subEmail, substitutoNome: subObj?subObj.nome:subEmail,
+      criadoEm: Date.now()
+    });
+    showToast('✅ Folga registrada — tarefas remanejadas para '+(subObj?subObj.nome:subEmail)+'.');
+    await carregarFolgasGer();
+  } else if(!colabEmail && originalKey){
+    await db.ref('/folgas/'+uk+'/'+data+'/'+turno+'/'+originalKey).remove();
+    showToast('✅ Folga removida.');
+    await carregarFolgasGer();
+  }
+  // se só um dos dois campos estiver preenchido, não salva ainda — espera o outro
+}
+async function removerFolga(turno,key){
+  const uk=unidadeKey(unidadeAtiva);
+  const data=document.getElementById('folga-data').value || dataOperacional();
+  await db.ref('/folgas/'+uk+'/'+data+'/'+turno+'/'+key).remove();
+  showToast('✅ Folga removida.');
+  await carregarFolgasGer();
+}
+function adicionarSlotFolga(turno){
+  folgaExtras[turno]=(folgaExtras[turno]||0)+1;
+  carregarFolgasGer();
 }
 
 async function carregarHistorico(){
