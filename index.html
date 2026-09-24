@@ -360,8 +360,17 @@ video,canvas{width:100%;border-radius:12px;background:#000}
       <div class="card">
         <div style="font-weight:700;font-size:12px;color:var(--muted);text-transform:uppercase;margin-bottom:8px">Relatório de cumprimento</div>
         <p style="font-size:11.5px;color:var(--muted);margin-bottom:8px">Baixa um arquivo com quem concluiu (ou não) as tarefas de um dia, pra importar no Gestão Masha.</p>
-        <input type="date" id="rel-data" style="margin-bottom:8px;width:100%;padding:10px;border-radius:10px;border:1px solid var(--bdr);background:var(--surf2);font-size:14px">
-        <button class="btn" onclick="exportarRelatorioChecklist()">⬇️ Baixar relatório do dia</button>
+        <div style="display:flex;gap:8px;margin-bottom:8px">
+          <div style="flex:1">
+            <label style="font-size:11px;color:var(--muted);display:block;margin-bottom:4px">De</label>
+            <input type="date" id="rel-data-inicio" style="width:100%;padding:10px;border-radius:10px;border:1px solid var(--bdr);background:var(--surf2);font-size:14px">
+          </div>
+          <div style="flex:1">
+            <label style="font-size:11px;color:var(--muted);display:block;margin-bottom:4px">Até</label>
+            <input type="date" id="rel-data-fim" style="width:100%;padding:10px;border-radius:10px;border:1px solid var(--bdr);background:var(--surf2);font-size:14px">
+          </div>
+        </div>
+        <button class="btn" onclick="exportarRelatorioChecklist()">⬇️ Baixar relatório do período</button>
       </div>
     </div>
 
@@ -1130,8 +1139,10 @@ function abrirTabGestao(tab){
   if(tab==='pontos'){
     carregarConfigPontos();
     carregarRankingGer();
-    const relData=document.getElementById('rel-data');
-    if(relData && !relData.value) relData.value = dataOperacional();
+    const relIni=document.getElementById('rel-data-inicio');
+    const relFim=document.getElementById('rel-data-fim');
+    if(relIni && !relIni.value) relIni.value = dataOperacional();
+    if(relFim && !relFim.value) relFim.value = dataOperacional();
   }
   if(tab==='problemas') carregarProblemasGer();
   if(tab==='folgas'){
@@ -1675,57 +1686,78 @@ async function carregarRankingGer(){
 }
 function emailParaNome(dic,email){ return (dic[email]&&dic[email].nome) || email; }
 
+function listaDatasRelatorio(ini, fim){
+  const out=[];
+  let d = new Date(ini+'T00:00:00');
+  const dFim = new Date(fim+'T00:00:00');
+  let guard=0;
+  while(d<=dFim && guard<366){
+    out.push(d.toISOString().slice(0,10));
+    d.setDate(d.getDate()+1);
+    guard++;
+  }
+  return out;
+}
+
 async function exportarRelatorioChecklist(){
   const uk=unidadeKey(unidadeAtiva);
-  const inputData=document.getElementById('rel-data');
-  const dataStr = (inputData && inputData.value) ? inputData.value : dataOperacional();
+  const inputIni=document.getElementById('rel-data-inicio');
+  const inputFim=document.getElementById('rel-data-fim');
+  const dataIni = (inputIni && inputIni.value) ? inputIni.value : dataOperacional();
+  const dataFim = (inputFim && inputFim.value) ? inputFim.value : dataIni;
+  if(dataFim < dataIni){ showToast('⚠️ A data final não pode ser antes da inicial.'); return; }
+  const datas = listaDatasRelatorio(dataIni, dataFim);
   const turnos=['dia','noite'];
   const porColab={};
-  for(const turno of turnos){
-    const [respSnap,execSnap,valSnap] = await Promise.all([
-      db.ref('/responsaveis/'+uk+'/'+turno).get(),
-      db.ref('/execucoes/'+uk+'/'+dataStr+'/'+turno).get(),
-      db.ref('/validacoes/'+uk+'/'+dataStr+'/'+turno).get()
-    ]);
-    const resp = respSnap.exists()?respSnap.val():{};
-    const exec = execSnap.exists()?execSnap.val():{};
-    const val = valSnap.exists()?valSnap.val():{};
-    Object.values(resp).forEach(r=>{
-      if(!r.email) return;
-      const k=turno+'|'+r.email;
-      if(!porColab[k]) porColab[k]={nome:r.nome,email:r.email,turno,atribuidas:0,concluidas:0,pontos:0};
-      porColab[k].atribuidas++;
-    });
-    Object.values(exec).forEach(e=>{
-      if(!e.email) return;
-      const k=turno+'|'+e.email;
-      if(!porColab[k]) porColab[k]={nome:e.nome,email:e.email,turno,atribuidas:0,concluidas:0,pontos:0};
-      porColab[k].concluidas++;
-      porColab[k].pontos += (e.pontos||0);
-    });
-    Object.keys(val).forEach(ek=>{
-      const v=val[ek];
-      if(!v.email) return;
-      const k=turno+'|'+v.email;
-      if(!porColab[k]) porColab[k]={nome:v.nome,email:v.email,turno,atribuidas:0,concluidas:0,pontos:0};
-      porColab[k].validou=true;
-    });
+  for(const dataStr of datas){
+    for(const turno of turnos){
+      const [respSnap,execSnap,valSnap] = await Promise.all([
+        db.ref('/responsaveis/'+uk+'/'+turno).get(),
+        db.ref('/execucoes/'+uk+'/'+dataStr+'/'+turno).get(),
+        db.ref('/validacoes/'+uk+'/'+dataStr+'/'+turno).get()
+      ]);
+      const resp = respSnap.exists()?respSnap.val():{};
+      const exec = execSnap.exists()?execSnap.val():{};
+      const val = valSnap.exists()?valSnap.val():{};
+      Object.values(resp).forEach(r=>{
+        if(!r.email) return;
+        const k=turno+'|'+r.email;
+        if(!porColab[k]) porColab[k]={nome:r.nome,email:r.email,turno,atribuidas:0,concluidas:0,pontos:0,diasComTarefa:0,diasCompletos:0};
+        porColab[k].atribuidas++;
+        porColab[k].diasComTarefa++;
+      });
+      Object.values(exec).forEach(e=>{
+        if(!e.email) return;
+        const k=turno+'|'+e.email;
+        if(!porColab[k]) porColab[k]={nome:e.nome,email:e.email,turno,atribuidas:0,concluidas:0,pontos:0,diasComTarefa:0,diasCompletos:0};
+        porColab[k].concluidas++;
+        porColab[k].pontos += (e.pontos||0);
+      });
+      Object.keys(val).forEach(ek=>{
+        const v=val[ek];
+        if(!v.email) return;
+        const k=turno+'|'+v.email;
+        if(!porColab[k]) porColab[k]={nome:v.nome,email:v.email,turno,atribuidas:0,concluidas:0,pontos:0,diasComTarefa:0,diasCompletos:0};
+        porColab[k].validou=true;
+      });
+    }
   }
   const linhas = Object.values(porColab).map(c=>({
     nome:c.nome, email:c.email, turno:c.turno,
     atribuidas:c.atribuidas, concluidas:c.concluidas,
     percentual: c.atribuidas>0 ? Math.round(c.concluidas/c.atribuidas*100) : (c.concluidas>0?100:0),
     validouSelfie: !!c.validou,
-    pontosDoDia: c.pontos
+    pontosNoPeriodo: c.pontos
   })).sort((a,b)=> a.percentual-b.percentual);
-  const payload = { app:'checklist-operacional-msh', unidade:unidadeAtiva, data:dataStr, geradoEm:new Date().toISOString(), colaboradores:linhas };
+  const payload = { app:'checklist-operacional-msh', unidade:unidadeAtiva, dataInicio:dataIni, dataFim:dataFim, dias:datas.length, geradoEm:new Date().toISOString(), colaboradores:linhas };
+  const nomeArq = dataIni===dataFim ? ('checklist_'+unidadeKey(unidadeAtiva)+'_'+dataIni+'.json') : ('checklist_'+unidadeKey(unidadeAtiva)+'_'+dataIni+'_a_'+dataFim+'.json');
   const blob = new Blob([JSON.stringify(payload,null,2)], {type:'application/json'});
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
-  a.href=url; a.download='checklist_'+unidadeKey(unidadeAtiva)+'_'+dataStr+'.json';
+  a.href=url; a.download=nomeArq;
   document.body.appendChild(a); a.click(); a.remove();
   URL.revokeObjectURL(url);
-  showToast('✅ Relatório baixado ('+linhas.length+' registro(s)).');
+  showToast('✅ Relatório baixado ('+linhas.length+' registro(s), '+datas.length+' dia(s)).');
 }
 
 async function zerarPontuacaoTodos(){
