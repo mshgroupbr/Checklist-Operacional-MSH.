@@ -856,7 +856,11 @@ async function carregarRanking(){
   try{
     const snap=await db.ref('/pontuacao/'+uk).get();
     if(!snap.exists()){ con.innerHTML='<p style="color:var(--muted);font-size:13px">Ninguém pontuou ainda.</p>'; if(btnTodos) btnTodos.style.display='none'; return; }
-    const dados=snap.val();
+    const dadosAll=snap.val();
+    const csnap=await db.ref('/colaboradores_autorizados').get();
+    const ativos=csnap.exists()?csnap.val():null;
+    const dados={}; // ranking só com quem ainda tem acesso (desligados somem)
+    Object.keys(dadosAll).forEach(k=>{ if(!ativos || (ativos[k]!==undefined && !(ativos[k] && ativos[k].ativo===false))) dados[k]=dadosAll[k]; });
     rankCompletoCache=Object.keys(dados).map(k=>({nome:dados[k].nome,total:dados[k].total||0})).sort((a,b)=>b.total-a.total);
     if(btnTodos) btnTodos.style.display = rankCompletoCache.length>5 ? 'flex' : 'none';
     desenharRanking();
@@ -1693,7 +1697,11 @@ async function carregarRankingGer(){
   const con=document.getElementById('pontos-ranking-lista');
   const snap=await db.ref('/pontuacao/'+uk).get();
   if(!snap.exists()){ con.innerHTML='<p style="color:var(--muted);font-size:13px">Ninguém pontuou ainda.</p>'; return; }
-  const dados=snap.val();
+  const dadosAll=snap.val();
+  const csnap=await db.ref('/colaboradores_autorizados').get();
+  const ativos=csnap.exists()?csnap.val():null;
+  const dados={}; // ranking só com quem ainda tem acesso (desligados somem)
+  Object.keys(dadosAll).forEach(k=>{ if(!ativos || (ativos[k]!==undefined && !(ativos[k] && ativos[k].ativo===false))) dados[k]=dadosAll[k]; });
   const keys=Object.keys(dados).sort((a,b)=>(dados[b].total||0)-(dados[a].total||0));
   con.innerHTML=keys.map(k=>{
     const p=dados[k];
