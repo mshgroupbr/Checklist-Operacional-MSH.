@@ -1235,7 +1235,7 @@ function calcularCargaTarefas(colabs,tarefasDia,tarefasNoite,resp){
       if(atual && atual.pausada) return; // tarefa pausada não entra na carga de ninguém
       const responsavel=atual||responsavelAutomatico(colabs,turno,tarefas[id].ordem||0);
       if(!responsavel) return;
-      if(!carga[responsavel.email]) carga[responsavel.email]={email:responsavel.email,nome:responsavel.nome,dia:0,noite:0};
+      if(!carga[responsavel.email]) return; // desligado/removido: não entra na carga
       carga[responsavel.email][turno]++;
     });
   }
@@ -1267,6 +1267,15 @@ async function carregarResponsaveisGer(){
   ]);
   const colabs=cSnap.exists()?Object.values(cSnap.val()).filter(c=>c.unidade===unidadeAtiva && c.ativo!==false):[];
   const resp=rSnap.exists()?rSnap.val():{};
+  // tarefas fixas de quem foi removido/desligado voltam sozinhas para o rodízio
+  const emailsAtivos=new Set(colabs.map(c=>c.email));
+  const orfas=[];
+  ['dia','noite'].forEach(tn=>Object.keys(resp[tn]||{}).forEach(id=>{ const r=resp[tn][id]; if(r && !r.pausada && r.email && !emailsAtivos.has(r.email)) orfas.push([tn,id]); }));
+  if(orfas.length){
+    await Promise.all(orfas.map(o=>db.ref('/responsaveis/'+uk+'/'+o[0]+'/'+o[1]).remove()));
+    orfas.forEach(o=>{ delete resp[o[0]][o[1]]; });
+    showToast('🧹 '+orfas.length+' tarefa(s) de colaborador desligado voltaram para o rodízio.');
+  }
   const tarefasDia=tSnapDia.val()||{};
   const tarefasNoite=tSnapNoite.val()||{};
   const folgasPorTurno={dia:fSnapDia.val()||{}, noite:fSnapNoite.val()||{}};
@@ -1428,6 +1437,16 @@ async function adicionarColaborador(){
 async function removerColaborador(key){
   if(!confirm('Remover o acesso de '+keyParaEmail(key)+'?')) return;
   await db.ref('/colaboradores_autorizados/'+key).remove();
+  // limpa também tarefas fixas e pontuação da pessoa removida (todas as unidades)
+  try{
+    const email=keyParaEmail(key);
+    for(const un of ['CALI CRAVINGS','TEXAS COUNTRY BAR']){
+      const uk=unidadeKey(un);
+      const rs=(await db.ref('/responsaveis/'+uk).get()).val()||{};
+      for(const tn of Object.keys(rs)) for(const id of Object.keys(rs[tn]||{})){ const r=rs[tn][id]; if(r && r.email===email) await db.ref('/responsaveis/'+uk+'/'+tn+'/'+id).remove(); }
+      await db.ref('/pontuacao/'+uk+'/'+key).remove();
+    }
+  }catch(e){ console.warn('limpeza do colaborador removido falhou',e); }
   await carregarColaboradoresGer();
   showToast('✅ Acesso removido.');
 }
