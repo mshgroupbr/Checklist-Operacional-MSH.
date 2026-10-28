@@ -675,11 +675,21 @@ async function carregarChecklist(){
   await atualizarBadgeProblemas();
 }
 
+function ehTodos(id){ const r=responsaveisCache[id]; return !!(r && r.todos); }
+function execKeyDe(id){ return (ehTodos(id) && googleUser) ? id+'__'+emailKey(googleUser.email) : id; }
+function execDe(id){ return execucoesCache[execKeyDe(id)]; }
+function feitoGeral(id){
+  if(!ehTodos(id)) return !!execucoesCache[id];
+  const n=Object.keys(execucoesCache).filter(k=>k.indexOf(id+'__')===0).length;
+  return colabsAtivosCache.length>0 && n>=colabsAtivosCache.length;
+}
 function responsavelDaTarefa(id){
   const t=tarefasCache[id];
   // tarefa pausada manualmente pela gestão: fica sem responsável até alguém trocar de novo
   if(responsaveisCache[id] && responsaveisCache[id].pausada) return null;
-  const base=responsaveisCache[id] || responsavelAutomatico(colabsAtivosCache,turnoSel,(t&&t.ordem)||0);
+  // "Todos": a tarefa é de cada colaborador — para quem está logado, o responsável é ele mesmo
+  if(ehTodos(id) && !googleUser) return null;
+  const base=ehTodos(id) ? {email:googleUser.email,nome:googleUser.nome} : (responsaveisCache[id] || responsavelAutomatico(colabsAtivosCache,turnoSel,(t&&t.ordem)||0));
   if(!base) return base;
   // se a pessoa que assumiria a tarefa está de folga hoje nesse turno, a tarefa
   // vai inteira pro substituto escolhido em Gestão → Folgas
@@ -733,23 +743,26 @@ function renderChecklist(){
   }else{
     con.innerHTML=idsVisiveis.map(id=>{
       const t=tarefasCache[id];
-      const feita=!!execucoesCache[id];
+      const exe=execDe(id);
+      const todosT=ehTodos(id);
+      const feita=todosT&&exibirTudo?feitoGeral(id):!!exe;
       // Cada tarefa trava quando a PESSOA responsável por ela já validou as
       // próprias tarefas com foto. O gestor no modo "ver tudo" pode corrigir
       // mesmo assim — sem precisar apagar o tipo da tarefa lá em Gestão.
       const podeMexer=!tarefaTravada(id) || exibirTudo;
-      const clique=podeMexer?`toggleTarefa('${id}')`:'';
+      const clique=(podeMexer && !(todosT&&exibirTudo))?`toggleTarefa('${id}')`:'';
       const resp=responsavelDaTarefa(id);
       const fixo=!!responsaveisCache[id];
-      const respLinha = resp ? (fixo?`👤 ${resp.nome}`:`🔁 ${resp.nome} (semana)`) : '';
+      const nFeitos=todosT?Object.keys(execucoesCache).filter(k=>k.indexOf(id+'__')===0).length:0;
+      const respLinha = todosT ? (exibirTudo?`👥 Todos (${nFeitos}/${colabsAtivosCache.length})`:'👥 Todos') : (resp ? (fixo?`👤 ${resp.nome}`:`🔁 ${resp.nome} (semana)`) : '');
       return `
       <div class="task-row${feita?' done':''}" id="task-${id}">
         <div class="task-check" onclick="${clique}">${feita?'✓':''}</div>
         <div class="task-info">
           <div class="task-nome">${t.nome}</div>
-          <div class="task-meta">${feita?('Concluída por '+(execucoesCache[id].nome||'')+' às '+new Date(execucoesCache[id].timestamp).toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'})):('Toque pra concluir'+(respLinha?' · '+respLinha:''))}</div>
+          <div class="task-meta">${(exe&&!(todosT&&exibirTudo))?('Concluída por '+(exe.nome||'')+' às '+new Date(exe.timestamp).toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'})+(todosT?' · 👥 Todos':'')):((todosT&&exibirTudo)?respLinha:('Toque pra concluir'+(respLinha?' · '+respLinha:'')))}</div>
         </div>
-        <span class="pts-pill">${feita?('+'+execucoesCache[id].pontos):('+'+t.pontos)}</span>
+        <span class="pts-pill">${(exe&&!(todosT&&exibirTudo))?('+'+exe.pontos):('+'+t.pontos)}</span>
       </div>`;
     }).join('');
   }
@@ -757,7 +770,7 @@ function renderChecklist(){
   // A barra de progresso mostra o turno inteiro (visão geral); a liberação
   // da validação com foto, porém, agora depende só das tarefas da PESSOA
   // logada — cada um valida a própria parte, não o restaurante inteiro.
-  const feitas=idsTodas.filter(id=>execucoesCache[id]).length;
+  const feitas=idsTodas.filter(id=>feitoGeral(id)).length;
   document.getElementById('prog-fill').style.width=(idsTodas.length?feitas/idsTodas.length*100:0)+'%';
   document.getElementById('prog-txt').textContent=feitas+' / '+idsTodas.length+' concluídas no turno todo';
 
@@ -766,7 +779,7 @@ function renderChecklist(){
   const meus=meusIds(idsTodas);
   if(meus.length){
     const minhaValidacao=googleUser?validacoesCache[emailKey(googleUser.email)]:null;
-    const meusFeitos=meus.filter(id=>execucoesCache[id]).length;
+    const meusFeitos=meus.filter(id=>execDe(id)).length;
     if(minhaValidacao){
       areaHtml+=`<div class="card" style="background:#eef7f0;border-color:#cfe9d6;margin:0 0 8px">
         <b style="color:var(--ok);font-size:13px">✅ Você validou suas tarefas às ${new Date(minhaValidacao.timestamp).toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'})}</b>
@@ -787,6 +800,10 @@ function renderChecklist(){
 function resumoValidacoesHtml(idsTodas){
   const porPessoa={};
   idsTodas.forEach(id=>{
+    if(ehTodos(id)){
+      colabsAtivosCache.forEach(function(c){ const ck=emailKey(c.email); if(!porPessoa[ck]) porPessoa[ck]={nome:c.nome,total:0,feitas:0}; porPessoa[ck].total++; if(execucoesCache[id+'__'+ck]) porPessoa[ck].feitas++; });
+      return;
+    }
     const r=responsavelDaTarefa(id);
     if(!r) return;
     const ek=emailKey(r.email);
@@ -809,6 +826,7 @@ function resumoValidacoesHtml(idsTodas){
 
 /* ── TOGGLE DE TAREFA (marca/desmarca, sem foto) ── */
 async function toggleTarefa(taskId){
+  const taskKey=execKeyDe(taskId);
   // Uma tarefa trava quando a PESSOA responsável por ela já validou as
   // próprias tarefas com foto. Gestor no modo "ver tudo" pode corrigir mesmo
   // assim — é a opção de desmarcar sem precisar excluir o tipo da tarefa lá
@@ -820,24 +838,24 @@ async function toggleTarefa(taskId){
   const pontRef=db.ref('/pontuacao/'+uk+'/'+emailKey(googleUser.email));
 
   try{
-    if(execucoesCache[taskId]){
+    if(execucoesCache[taskKey]){
       // Desmarcar: remove a execução e devolve os pontos
-      const pontosAntigos=execucoesCache[taskId].pontos||0;
-      await db.ref('/execucoes/'+uk+'/'+dataOperacional()+'/'+turnoSel+'/'+taskId).remove();
+      const pontosAntigos=execucoesCache[taskKey].pontos||0;
+      await db.ref('/execucoes/'+uk+'/'+dataOperacional()+'/'+turnoSel+'/'+taskKey).remove();
       const pSnap=await pontRef.get();
       const atual=pSnap.exists()?(pSnap.val().total||0):0;
       await pontRef.set({nome:googleUser.nome,total:Math.max(0,atual-pontosAntigos)});
-      delete execucoesCache[taskId];
+      delete execucoesCache[taskKey];
     }else{
       const hora=new Date().getHours();
       const noPrazo = hora < LIMITE_HORA[turnoSel];
       const pontos=(t.pontos||PTS_TAREFA)+(noPrazo?PTS_BONUS_PRAZO:0);
       const registro={email:googleUser.email,nome:googleUser.nome,timestamp:Date.now(),pontos,noPrazo};
-      await db.ref('/execucoes/'+uk+'/'+dataOperacional()+'/'+turnoSel+'/'+taskId).set(registro);
+      await db.ref('/execucoes/'+uk+'/'+dataOperacional()+'/'+turnoSel+'/'+taskKey).set(registro);
       const pSnap=await pontRef.get();
       const atual=pSnap.exists()?(pSnap.val().total||0):0;
       await pontRef.set({nome:googleUser.nome,total:atual+pontos});
-      execucoesCache[taskId]=registro;
+      execucoesCache[taskKey]=registro;
     }
     renderChecklist();
     carregarRanking();
@@ -887,7 +905,7 @@ function toggleRankingCompleto(){
 function abrirValidarTurno(){
   if(!googleUser) return;
   const meus=meusIds(Object.keys(tarefasCache));
-  const feitas=meus.filter(id=>execucoesCache[id]).length;
+  const feitas=meus.filter(id=>execDe(id)).length;
   if(!meus.length){ showToast('⚠️ Você não tem tarefas designadas nesse turno.'); return; }
   if(feitas<meus.length){ showToast('⚠️ Conclua todas as suas tarefas antes de validar.'); return; }
   if(validacoesCache[emailKey(googleUser.email)]){ showToast('⚠️ Você já validou suas tarefas.'); return; }
@@ -1236,7 +1254,7 @@ function calcularCargaTarefas(colabs,tarefasDia,tarefasNoite,resp){
     Object.keys(tarefas).forEach(id=>{
       const atual=(resp[turno]||{})[id];
       if(atual && atual.pausada) return; // tarefa pausada não entra na carga de ninguém
-      if(atual && atual.pausada) return; // tarefa pausada não entra na carga de ninguém
+      if(atual && atual.todos){ colabs.forEach(c=>{ if(carga[c.email]) carga[c.email][turno]++; }); return; } // "Todos": entra na carga de cada um
       const responsavel=atual||responsavelAutomatico(colabs,turno,tarefas[id].ordem||0);
       if(!responsavel) return;
       if(!carga[responsavel.email]) return; // desligado/removido: não entra na carga
@@ -1305,18 +1323,21 @@ async function carregarResponsaveisGer(){
       const atual=(resp[turno]||{})[id];
       const pausada=!!(atual && atual.pausada);
       const auto=responsavelAutomatico(colabs,turno,tarefas[id].ordem||0);
-      const donoAtual=pausada?null:(atual||auto);
+      const todosT=!!(atual && atual.todos);
+      const donoAtual=(pausada||todosT)?null:(atual||auto);
       const folga=donoAtual?folgasPorTurno[turno][emailKey(donoAtual.email)]:null;
       const donoEfetivo=folga?{email:folga.substitutoEmail,nome:folga.substitutoNome}:donoAtual;
-      if(filtroEmail && (!donoEfetivo || donoEfetivo.email!==filtroEmail)) return;
+      if(filtroEmail && !todosT && (!donoEfetivo || donoEfetivo.email!==filtroEmail)) return;
       totalFiltrado++;
       htmlTurno+=`<div class="list-row">
         <div class="info" style="flex:1"><b>${tarefas[id].nome}</b>
           ${!atual && auto?`<div class="sub">🔁 essa semana: ${auto.nome}</div>`:''}
+          ${todosT?`<div class="sub">👥 todos os colaboradores fazem essa tarefa</div>`:''}
           ${folga?`<div class="sub" style="color:#b5860a">🏖️ hoje: ${folga.nome} de folga → ${folga.substitutoNome} assume</div>`:''}
         </div>
         <select style="padding:6px;border-radius:7px;border:1px solid var(--borda)" onchange="definirResponsavel('${turno}','${id}',this.value)">
           <option value="">🔁 Rodízio automático</option>
+          <option value="__TODOS__" ${todosT?'selected':''}>👥 Todos (cada um faz a sua)</option>
           <option value="__PAUSADA__" ${pausada?'selected':''}>⏸️ Ninguém (pausar tarefa)</option>
           ${colabs.map(c=>`<option value="${c.email}" ${atual&&atual.email===c.email?'selected':''}>${c.nome} (fixo)</option>`).join('')}
         </select>
@@ -1334,6 +1355,10 @@ async function carregarResponsaveisGer(){
 async function definirResponsavel(turno,taskId,email){
   const uk=unidadeKey(unidadeAtiva);
   if(!email){ await db.ref('/responsaveis/'+uk+'/'+turno+'/'+taskId).remove(); }
+  else if(email==='__TODOS__'){
+    await db.ref('/responsaveis/'+uk+'/'+turno+'/'+taskId).set({todos:true,inicio:hojeISO()});
+    showToast('👥 Tarefa para todos — cada colaborador cumpre e pontua a sua.');
+  }
   else if(email==='__PAUSADA__'){
     await db.ref('/responsaveis/'+uk+'/'+turno+'/'+taskId).set({pausada:true,inicio:hojeISO()});
     showToast('⏸️ Tarefa pausada — ninguém vai vê-la até você trocar de novo.');
@@ -1736,6 +1761,8 @@ async function exportarRelatorioChecklist(){
   const datas = listaDatasRelatorio(dataIni, dataFim);
   const turnos=['dia','noite'];
   const porColab={};
+  const _csRel=await db.ref('/colaboradores_autorizados').get();
+  const colabsRel=_csRel.exists()?Object.values(_csRel.val()).filter(c=>c.unidade===unidadeAtiva && c.ativo!==false):[];
   for(const dataStr of datas){
     for(const turno of turnos){
       const [respSnap,execSnap,valSnap] = await Promise.all([
@@ -1747,6 +1774,7 @@ async function exportarRelatorioChecklist(){
       const exec = execSnap.exists()?execSnap.val():{};
       const val = valSnap.exists()?valSnap.val():{};
       Object.values(resp).forEach(r=>{
+        if(r && r.todos){ colabsRel.forEach(c=>{ const k=turno+'|'+c.email; if(!porColab[k]) porColab[k]={nome:c.nome,email:c.email,turno,atribuidas:0,concluidas:0,pontos:0,diasComTarefa:0,diasCompletos:0}; porColab[k].atribuidas++; }); return; }
         if(!r.email) return;
         const k=turno+'|'+r.email;
         if(!porColab[k]) porColab[k]={nome:r.nome,email:r.email,turno,atribuidas:0,concluidas:0,pontos:0,diasComTarefa:0,diasCompletos:0};
