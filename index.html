@@ -239,6 +239,16 @@ body.desk #colab-lista{display:grid;grid-template-columns:repeat(auto-fill,minma
 </div>
 
 <!-- MODAL: VALIDAR TURNO (selfie + geolocalização, depois de todas as tarefas concluídas) -->
+<div class="overlay" id="overlay-whats">
+  <div class="modal">
+    <h3>✅ Checklist concluído</h3>
+    <p style="font-size:13px;color:var(--muted);margin-bottom:10px">Envie a foto no grupo do WhatsApp do checklist para avisar a equipe e a gestão.</p>
+    <img id="whats-preview" class="thumb" style="display:none;margin:0 auto 10px">
+    <button class="btn btn-primary btn-block" style="background:#1f9d55" onclick="compartilharChecklist()">📲 Enviar no grupo do WhatsApp</button>
+    <p style="font-size:11.5px;color:var(--muted);margin-top:8px">Ao tocar, escolha o WhatsApp e depois o grupo. No computador, a foto é baixada e o WhatsApp abre com a mensagem pronta — é só anexar.</p>
+    <button class="btn btn-outline btn-block" style="margin-top:10px" onclick="document.getElementById('overlay-whats').classList.remove('on')">Fechar</button>
+  </div>
+</div>
 <div class="overlay" id="overlay-concluir">
   <div class="modal">
     <h3 id="concluir-titulo">Validar turno</h3>
@@ -583,6 +593,7 @@ let colabsAtivosCache=[]; // colaboradores ativos da unidade ativa, p/ calcular 
 let folgasCache={};       // {emailKeyDeQuemFolgou:{email,nome,substitutoEmail,substitutoNome}} — turno/dia atual
 let verTudo=false;        // gestor pode alternar entre "minhas tarefas" e ver o checklist inteiro
 let _fotoBase64=null;
+let _fotoGrande=null;
 let _geoOk=false,_geoLat=null,_geoLng=null;
 let _geoWatchdog=null; // timeout manual — cobre navegadores que travam sem nunca chamar o callback nativo
 let _camStream=null;
@@ -742,7 +753,8 @@ function responsavelDaTarefa(id){
   // "Todos": a tarefa é de cada colaborador — para quem está logado, o responsável é ele mesmo
   if(ehTodos(id) && !googleUser) return null;
   if(ehTodos(id)){ const eu=colabsAtivosCache.find(c=>c.email===googleUser.email); if(eu && !turnoAtende(eu,turnoSel)) return null; }
-  const base=ehTodos(id) ? {email:googleUser.email,nome:googleUser.nome} : (responsaveisCache[id] || responsavelAutomatico(colabsAtivosCache,turnoSel,(t&&t.ordem)||0));
+  const rs=responsaveisCache[id]&&responsaveisCache[id].rodizioSetor;
+  const base=ehTodos(id) ? {email:googleUser.email,nome:googleUser.nome} : (rs ? responsavelAutomatico(colabsAtivosCache.filter(c=>c.setor===rs),turnoSel,(t&&t.ordem)||0) : (responsaveisCache[id] || responsavelAutomatico(colabsAtivosCache,turnoSel,(t&&t.ordem)||0)));
   if(!base) return base;
   // se a pessoa que assumiria a tarefa está de folga hoje nesse turno, a tarefa
   // vai inteira pro substituto escolhido em Gestão → Folgas
@@ -805,7 +817,7 @@ function renderChecklist(){
       const podeMexer=!tarefaTravada(id) || exibirTudo;
       const clique=(podeMexer && !(todosT&&exibirTudo))?`toggleTarefa('${id}')`:'';
       const resp=responsavelDaTarefa(id);
-      const fixo=!!responsaveisCache[id];
+      const fixo=!!responsaveisCache[id] && !responsaveisCache[id].rodizioSetor;
       const nFeitos=todosT?Object.keys(execucoesCache).filter(k=>k.indexOf(id+'__')===0).length:0;
       const respLinha = todosT ? (exibirTudo?`👥 Todos (${nFeitos}/${colabsDoTurno(colabsAtivosCache,turnoSel).length})`:'👥 Todos') : (resp ? (fixo?`👤 ${resp.nome}`:`🔁 ${resp.nome} (semana)`) : '');
       return `
@@ -836,6 +848,7 @@ function renderChecklist(){
     if(minhaValidacao){
       areaHtml+=`<div class="card" style="background:#eef7f0;border-color:#cfe9d6;margin:0 0 8px">
         <b style="color:var(--ok);font-size:13px">✅ Você validou suas tarefas às ${new Date(minhaValidacao.timestamp).toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'})}</b>
+        <button class="btn btn-primary btn-block" style="background:#1f9d55;margin-top:8px" onclick="abrirOverlayWhats()">📲 Enviar no grupo do WhatsApp</button>
       </div>`;
     }else if(meusFeitos===meus.length){
       areaHtml+=`<button class="btn btn-primary btn-block" onclick="abrirValidarTurno()">📸 Validar minhas tarefas com foto (+${PTS_BONUS_TURNO} pts)</button>`;
@@ -1052,6 +1065,12 @@ function capturarFrame(){
   const ctx=canvas.getContext('2d');
   ctx.drawImage(video,0,0,320,240);
   _fotoBase64=canvas.toDataURL('image/jpeg',0.6);
+  try{ // versão maior da mesma foto, usada só para enviar no WhatsApp
+    const vw=video.videoWidth||640, vh=video.videoHeight||480, esc=Math.min(1,1024/vw);
+    const big=document.createElement('canvas'); big.width=Math.round(vw*esc); big.height=Math.round(vh*esc);
+    big.getContext('2d').drawImage(video,0,0,big.width,big.height);
+    _fotoGrande=big.toDataURL('image/jpeg',0.85);
+  }catch(e){ _fotoGrande=null; }
   if(_camStream){ _camStream.getTracks().forEach(t=>t.stop()); _camStream=null; }
   video.style.display='none';
   const preview=document.getElementById('cam-preview');
@@ -1064,6 +1083,33 @@ function fecharConcluir(){
   document.getElementById('overlay-concluir').classList.remove('on');
   document.getElementById('btn-tirar-foto').onclick=tirarFoto;
   document.getElementById('btn-tirar-foto').textContent='📷 Tirar foto';
+}
+function abrirOverlayWhats(){
+  const ek=googleUser?emailKey(googleUser.email):'';
+  const foto=_fotoGrande||((validacoesCache[ek]||{}).selfie)||null;
+  const img=document.getElementById('whats-preview');
+  if(foto){ img.src=foto; img.style.display='block'; } else { img.style.display='none'; }
+  document.getElementById('overlay-whats').classList.add('on');
+}
+async function compartilharChecklist(){
+  const ek=googleUser?emailKey(googleUser.email):'';
+  const foto=_fotoGrande||((validacoesCache[ek]||{}).selfie)||null;
+  const meus=meusIds(Object.keys(tarefasCache));
+  const feitas=meus.filter(id=>execDe(id)).length;
+  const val=validacoesCache[ek];
+  const hora=new Date(val&&val.timestamp?val.timestamp:Date.now()).toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'});
+  const texto='✅ *CHECKLIST CONCLUÍDO*\n🏠 '+unidadeAtiva+'\n'+(turnoSel==='dia'?'☀️ Turno Dia':'🌙 Turno Noite')+' · '+formatarDataBR(dataOperacional())+'\n👤 '+googleUser.nome+'\n📋 '+feitas+'/'+meus.length+' tarefas · validado às '+hora;
+  try{
+    if(foto && navigator.canShare && navigator.share){
+      const blob=await (await fetch(foto)).blob();
+      const file=new File([blob],'checklist-concluido.jpg',{type:'image/jpeg'});
+      if(navigator.canShare({files:[file]})){ await navigator.share({files:[file],text:texto,title:'Checklist concluído'}); return; }
+    }
+  }catch(e){ if(e && e.name==='AbortError') return; }
+  // sem compartilhamento nativo (ex.: computador): baixa a foto e abre o WhatsApp com a mensagem pronta
+  if(foto){ const a=document.createElement('a'); a.href=foto; a.download='checklist-concluido.jpg'; document.body.appendChild(a); a.click(); a.remove(); }
+  window.open('https://wa.me/?text='+encodeURIComponent(texto),'_blank');
+  showToast(foto?'📎 Foto baixada — anexe no grupo do WhatsApp.':'Abra o grupo e envie a mensagem.');
 }
 async function confirmarValidacaoTurno(){
   if(!_geoOk || !_fotoBase64 || !googleUser) return;
@@ -1086,6 +1132,7 @@ async function confirmarValidacaoTurno(){
     carregarRanking();
     fecharConcluir();
     showToast('✅ Suas tarefas foram validadas! +'+PTS_BONUS_TURNO+' pontos');
+    abrirOverlayWhats();
   }catch(err){
     showToast('❌ Erro ao salvar: '+err.message);
   }
@@ -1308,7 +1355,7 @@ function calcularCargaTarefas(colabs,tarefasDia,tarefasNoite,resp){
       const atual=(resp[turno]||{})[id];
       if(atual && atual.pausada) return; // tarefa pausada não entra na carga de ninguém
       if(atual && atual.todos){ colabsDoTurno(colabs,turno).forEach(c=>{ if(carga[c.email]) carga[c.email][turno]++; }); return; } // "Todos": entra na carga de cada um
-      const responsavel=atual||responsavelAutomatico(colabs,turno,tarefas[id].ordem||0);
+      const responsavel=(atual&&atual.rodizioSetor)?responsavelAutomatico(colabs.filter(c=>c.setor===atual.rodizioSetor),turno,tarefas[id].ordem||0):(atual||responsavelAutomatico(colabs,turno,tarefas[id].ordem||0));
       if(!responsavel) return;
       if(!carga[responsavel.email]) return; // desligado/removido: não entra na carga
       carga[responsavel.email][turno]++;
@@ -1377,7 +1424,10 @@ async function carregarResponsaveisGer(){
       const pausada=!!(atual && atual.pausada);
       const auto=responsavelAutomatico(colabs,turno,tarefas[id].ordem||0);
       const todosT=!!(atual && atual.todos);
-      const donoAtual=(pausada||todosT)?null:(atual||auto);
+      const rodSetor=(atual&&atual.rodizioSetor)||'';
+      const rotSetor=(SETORES_COLAB.find(s=>s[0]===rodSetor)||[])[1]||rodSetor;
+      const autoSetor=rodSetor?responsavelAutomatico(colabs.filter(c=>c.setor===rodSetor),turno,tarefas[id].ordem||0):null;
+      const donoAtual=(pausada||todosT)?null:(rodSetor?autoSetor:(atual||auto));
       const folga=donoAtual?folgasPorTurno[turno][emailKey(donoAtual.email)]:null;
       const donoEfetivo=folga?{email:folga.substitutoEmail,nome:folga.substitutoNome}:donoAtual;
       if(filtroEmail && !todosT && (!donoEfetivo || donoEfetivo.email!==filtroEmail)) return;
@@ -1386,11 +1436,15 @@ async function carregarResponsaveisGer(){
         <div class="info" style="flex:1"><b>${tarefas[id].nome}</b>
           ${!atual && auto?`<div class="sub">🔁 essa semana: ${auto.nome}</div>`:''}
           ${todosT?`<div class="sub">👥 todos os colaboradores fazem essa tarefa</div>`:''}
+          ${rodSetor?`<div class="sub">🔁 rodízio do setor ${rotSetor} — essa semana: ${autoSetor?autoSetor.nome:'<span style="color:var(--erro)">ninguém desse setor neste turno</span>'}</div>`:''}
           ${folga?`<div class="sub" style="color:#b5860a">🏖️ hoje: ${folga.nome} de folga → ${folga.substitutoNome} assume</div>`:''}
         </div>
         <select style="padding:6px;border-radius:7px;border:1px solid var(--borda)" onchange="definirResponsavel('${turno}','${id}',this.value)">
           <option value="">🔁 Rodízio automático</option>
           <option value="__TODOS__" ${todosT?'selected':''}>👥 Todos (cada um faz a sua)</option>
+          <optgroup label="Rodízio por setor">
+            ${SETORES_COLAB.map(s=>`<option value="__SETOR__${s[0]}" ${rodSetor===s[0]?'selected':''}>${s[2]} Rodízio: ${s[1]}</option>`).join('')}
+          </optgroup>
           <option value="__PAUSADA__" ${pausada?'selected':''}>⏸️ Ninguém (pausar tarefa)</option>
           ${colabs.map(c=>`<option value="${c.email}" ${atual&&atual.email===c.email?'selected':''}>${c.nome} (fixo)</option>`).join('')}
         </select>
@@ -1408,6 +1462,11 @@ async function carregarResponsaveisGer(){
 async function definirResponsavel(turno,taskId,email){
   const uk=unidadeKey(unidadeAtiva);
   if(!email){ await db.ref('/responsaveis/'+uk+'/'+turno+'/'+taskId).remove(); }
+  else if(email.indexOf('__SETOR__')===0){
+    const st=email.slice(9);
+    await db.ref('/responsaveis/'+uk+'/'+turno+'/'+taskId).set({rodizioSetor:st,inicio:hojeISO()});
+    showToast('🔁 Rodízio só entre os colaboradores do setor escolhido.');
+  }
   else if(email==='__TODOS__'){
     await db.ref('/responsaveis/'+uk+'/'+turno+'/'+taskId).set({todos:true,inicio:hojeISO()});
     showToast('👥 Tarefa para todos — cada colaborador cumpre e pontua a sua.');
