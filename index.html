@@ -103,9 +103,32 @@ video,canvas{width:100%;border-radius:12px;background:#000}
 .toast.on{opacity:1;transform:translateX(-50%) translateY(0)}
 .thumb{width:100%;border-radius:10px;margin-top:8px}
 .badge-off{background:#fdecea;color:var(--erro);font-size:11px;font-weight:700;padding:3px 8px;border-radius:7px}
+
+/* ===== VERSÃO COMPUTADOR ===== */
+#side{display:none}
+body.desk #side.on{display:flex;position:fixed;left:0;top:0;bottom:0;width:236px;background:var(--verde);color:#fff;flex-direction:column;padding:16px 10px;gap:3px;z-index:60;overflow-y:auto}
+#side .side-brand{font-weight:800;font-size:15px;letter-spacing:.3px;padding:2px 8px}
+#side .side-sub{font-size:11.5px;opacity:.8;padding:0 8px 8px}
+#side .side-sec{font-size:10.5px;text-transform:uppercase;letter-spacing:.8px;opacity:.6;padding:10px 8px 3px}
+#side .side-it{display:flex;align-items:center;gap:8px;width:100%;text-align:left;padding:9px 10px;border:0;border-radius:9px;background:transparent;color:#fff;font-size:13.5px;font-weight:600;cursor:pointer}
+#side .side-it:hover{background:rgba(255,255,255,.12)}
+#side .side-it.on{background:#fff;color:var(--verde)}
+#side .side-grow{flex:1}
+#side .modeseg{display:flex;gap:4px;padding:4px 0}
+#side .modeseg button{flex:1;padding:8px 4px;border:1px solid rgba(255,255,255,.35);border-radius:8px;background:transparent;color:#fff;font-size:12px;font-weight:700;cursor:pointer}
+#side .modeseg button.on{background:#fff;color:var(--verde)}
+body.desk.hasside .screen.active{padding-left:236px}
+body.desk.hasside .wrap{max-width:1040px;padding:22px}
+body.desk.hasside .tabs{display:none}
+body.desk.hasside .hdr{padding:14px 26px}
+body.desk #colab-lista{display:grid;grid-template-columns:repeat(auto-fill,minmax(360px,1fr));gap:14px 18px;align-items:start}
+.colab-grupo{margin-bottom:12px}
+.colab-grupo-t{font-weight:800;font-size:12.5px;text-transform:uppercase;letter-spacing:.5px;color:var(--verde);background:var(--areia);border-radius:8px;padding:6px 10px;margin-bottom:2px;display:flex;justify-content:space-between}
+.colab-grupo-t span{opacity:.6}
 </style>
 </head>
 <body>
+<div id="side"></div>
 
 <!-- LOGIN -->
 <div id="screen-login" class="screen active">
@@ -315,6 +338,24 @@ video,canvas{width:100%;border-radius:12px;background:#000}
             <option value="TEXAS COUNTRY BAR">Texas Country Bar</option>
           </select>
         </div>
+        <div class="fld">
+          <label>Setor</label>
+          <select id="colab-novo-setor">
+            <option value="">Sem setor</option>
+            <option value="GARCOM">Garçom</option>
+            <option value="CAIXA">Caixa</option>
+            <option value="HOSTESS">Hostess</option>
+            <option value="CUMIM">Cumim</option>
+          </select>
+        </div>
+        <div class="fld">
+          <label>Turno</label>
+          <select id="colab-novo-turno">
+            <option value="ambos">Dia e noite</option>
+            <option value="dia">Dia</option>
+            <option value="noite">Noite</option>
+          </select>
+        </div>
         <label style="display:flex;align-items:center;gap:8px;font-size:13px;margin-bottom:10px">
           <input type="checkbox" id="colab-novo-gestor"> Também é gestor (acessa essa tela)
         </label>
@@ -444,7 +485,18 @@ function indiceRodizio(){
    entre os colaboradores ativos da unidade. Cada tarefa (por ordem) começa
    "deslocada" das outras, e o turno da noite tem um deslocamento extra — assim
    tarefas diferentes tendem a cair com pessoas diferentes na mesma semana. */
+const SETORES_COLAB=[['GARCOM','Garçons','🍽️'],['CAIXA','Caixa','💵'],['HOSTESS','Hostess','🎟️'],['CUMIM','Cumins','🥤']];
+function turnoAtende(c,turno){ const tc=(c&&c.turno||'').toLowerCase(); return !tc || tc==='ambos' || tc===turno; }
+function colabsDoTurno(colabs,turno){ return (colabs||[]).filter(c=>turnoAtende(c,turno)); }
+function turnoRotulo(c){ const tc=(c&&c.turno||'').toLowerCase(); return tc==='dia'?'☀️ Dia':tc==='noite'?'🌙 Noite':'☀️🌙 Dia e noite'; }
+function agruparColabsHtml(keys,dados,rowHtml){
+  const nomeDe=k=>((dados[k]&&dados[k].nome)||k).toString();
+  const grupos=SETORES_COLAB.map(s=>({id:s[0],rot:s[2]+' '+s[1],ks:[]})).concat([{id:'',rot:'👤 Sem setor',ks:[]}]);
+  keys.forEach(k=>{ const s=(dados[k]&&dados[k].setor)||''; const g=grupos.find(x=>x.id===s)||grupos[grupos.length-1]; g.ks.push(k); });
+  return grupos.filter(g=>g.ks.length).map(g=>'<div class="colab-grupo"><div class="colab-grupo-t">'+g.rot+' <span>'+g.ks.length+'</span></div>'+g.ks.sort((a,b)=>nomeDe(a).localeCompare(nomeDe(b),'pt-BR')).map(rowHtml).join('')+'</div>').join('');
+}
 function responsavelAutomatico(colabsAtivos,turno,ordemTarefa){
+  colabsAtivos=colabsDoTurno(colabsAtivos,turno);
   if(!colabsAtivos.length) return null;
   const deslocNoite = turno==='noite' ? Math.ceil(colabsAtivos.length/2) : 0;
   const i = (ordemTarefa + indiceRodizio() + deslocNoite) % colabsAtivos.length;
@@ -681,7 +733,7 @@ function execDe(id){ return execucoesCache[execKeyDe(id)]; }
 function feitoGeral(id){
   if(!ehTodos(id)) return !!execucoesCache[id];
   const n=Object.keys(execucoesCache).filter(k=>k.indexOf(id+'__')===0).length;
-  return colabsAtivosCache.length>0 && n>=colabsAtivosCache.length;
+  const alvo=colabsDoTurno(colabsAtivosCache,turnoSel).length; return alvo>0 && n>=alvo;
 }
 function responsavelDaTarefa(id){
   const t=tarefasCache[id];
@@ -689,6 +741,7 @@ function responsavelDaTarefa(id){
   if(responsaveisCache[id] && responsaveisCache[id].pausada) return null;
   // "Todos": a tarefa é de cada colaborador — para quem está logado, o responsável é ele mesmo
   if(ehTodos(id) && !googleUser) return null;
+  if(ehTodos(id)){ const eu=colabsAtivosCache.find(c=>c.email===googleUser.email); if(eu && !turnoAtende(eu,turnoSel)) return null; }
   const base=ehTodos(id) ? {email:googleUser.email,nome:googleUser.nome} : (responsaveisCache[id] || responsavelAutomatico(colabsAtivosCache,turnoSel,(t&&t.ordem)||0));
   if(!base) return base;
   // se a pessoa que assumiria a tarefa está de folga hoje nesse turno, a tarefa
@@ -754,7 +807,7 @@ function renderChecklist(){
       const resp=responsavelDaTarefa(id);
       const fixo=!!responsaveisCache[id];
       const nFeitos=todosT?Object.keys(execucoesCache).filter(k=>k.indexOf(id+'__')===0).length:0;
-      const respLinha = todosT ? (exibirTudo?`👥 Todos (${nFeitos}/${colabsAtivosCache.length})`:'👥 Todos') : (resp ? (fixo?`👤 ${resp.nome}`:`🔁 ${resp.nome} (semana)`) : '');
+      const respLinha = todosT ? (exibirTudo?`👥 Todos (${nFeitos}/${colabsDoTurno(colabsAtivosCache,turnoSel).length})`:'👥 Todos') : (resp ? (fixo?`👤 ${resp.nome}`:`🔁 ${resp.nome} (semana)`) : '');
       return `
       <div class="task-row${feita?' done':''}" id="task-${id}">
         <div class="task-check" onclick="${clique}">${feita?'✓':''}</div>
@@ -801,7 +854,7 @@ function resumoValidacoesHtml(idsTodas){
   const porPessoa={};
   idsTodas.forEach(id=>{
     if(ehTodos(id)){
-      colabsAtivosCache.forEach(function(c){ const ck=emailKey(c.email); if(!porPessoa[ck]) porPessoa[ck]={nome:c.nome,total:0,feitas:0}; porPessoa[ck].total++; if(execucoesCache[id+'__'+ck]) porPessoa[ck].feitas++; });
+      colabsDoTurno(colabsAtivosCache,turnoSel).forEach(function(c){ const ck=emailKey(c.email); if(!porPessoa[ck]) porPessoa[ck]={nome:c.nome,total:0,feitas:0}; porPessoa[ck].total++; if(execucoesCache[id+'__'+ck]) porPessoa[ck].feitas++; });
       return;
     }
     const r=responsavelDaTarefa(id);
@@ -1254,7 +1307,7 @@ function calcularCargaTarefas(colabs,tarefasDia,tarefasNoite,resp){
     Object.keys(tarefas).forEach(id=>{
       const atual=(resp[turno]||{})[id];
       if(atual && atual.pausada) return; // tarefa pausada não entra na carga de ninguém
-      if(atual && atual.todos){ colabs.forEach(c=>{ if(carga[c.email]) carga[c.email][turno]++; }); return; } // "Todos": entra na carga de cada um
+      if(atual && atual.todos){ colabsDoTurno(colabs,turno).forEach(c=>{ if(carga[c.email]) carga[c.email][turno]++; }); return; } // "Todos": entra na carga de cada um
       const responsavel=atual||responsavelAutomatico(colabs,turno,tarefas[id].ordem||0);
       if(!responsavel) return;
       if(!carga[responsavel.email]) return; // desligado/removido: não entra na carga
@@ -1381,7 +1434,7 @@ async function carregarColaboradoresGer(){
   const filtro=document.getElementById('colab-filtro-unidade').value;
   const keys=Object.keys(dados).filter(k=>!filtro || (dados[k]&&dados[k].unidade)===filtro);
   if(!keys.length){ con.innerHTML='<p style="color:var(--muted);font-size:13px">Nenhum colaborador cadastrado nessa unidade.</p>'; return; }
-  con.innerHTML=keys.map(k=>{
+  const rowHtml=k=>{
     const cRaw=dados[k];
     const c=(cRaw && typeof cRaw==='object')?cRaw:{}; // registros antigos podem ser só "true"
     if(editingColabKey===k){
@@ -1394,6 +1447,19 @@ async function carregarColaboradoresGer(){
             <option value="TEXAS COUNTRY BAR"${c.unidade==='TEXAS COUNTRY BAR'?' selected':''}>Texas Country Bar</option>
           </select>
         </div>
+        <div class="fld" style="margin:0"><label>Setor</label>
+          <select id="edit-colab-setor-${k}">
+            <option value="">Sem setor</option>
+            ${SETORES_COLAB.map(s=>'<option value="'+s[0]+'"'+(c.setor===s[0]?' selected':'')+'>'+s[1]+'</option>').join('')}
+          </select>
+        </div>
+        <div class="fld" style="margin:0"><label>Turno</label>
+          <select id="edit-colab-turno-${k}">
+            <option value="ambos"${(!c.turno||c.turno==='ambos')?' selected':''}>Dia e noite</option>
+            <option value="dia"${c.turno==='dia'?' selected':''}>Dia</option>
+            <option value="noite"${c.turno==='noite'?' selected':''}>Noite</option>
+          </select>
+        </div>
         <label style="display:flex;align-items:center;gap:6px;font-size:13px"><input type="checkbox" id="edit-colab-gestor-${k}" ${c.gestor?'checked':''}> Também é gestor</label>
         <div style="display:flex;gap:8px">
           <button class="btn-sm" onclick="salvarEdicaoColaborador('${k}')">Salvar</button>
@@ -1402,13 +1468,14 @@ async function carregarColaboradoresGer(){
       </div>`;
     }
     return `<div class="list-row">
-      <div class="info"><b>${c.nome||keyParaEmail(k)}</b><div class="sub">${c.unidade||'sem unidade'}${c.gestor?' · gestor':''}</div></div>
+      <div class="info"><b>${c.nome||keyParaEmail(k)}</b><div class="sub">${c.unidade||'sem unidade'} · ${turnoRotulo(c)}${c.gestor?' · gestor':''}</div></div>
       <div style="display:flex;gap:6px">
         <button class="btn-del" onclick="editarColaborador('${k}')" title="Editar">✏️</button>
         <button class="btn-del" onclick="removerColaborador('${k}')" title="Remover">🗑️</button>
       </div>
     </div>`;
-  }).join('');
+  };
+  con.innerHTML=agruparColabsHtml(keys,dados,rowHtml);
 }
 function editarColaborador(key){
   editingColabKey=key;
@@ -1423,6 +1490,8 @@ async function salvarEdicaoColaborador(key){
   const email=document.getElementById('edit-colab-email-'+key).value.trim().toLowerCase();
   const unidade=document.getElementById('edit-colab-unidade-'+key).value;
   const gestor=document.getElementById('edit-colab-gestor-'+key).checked;
+  const setor=document.getElementById('edit-colab-setor-'+key).value;
+  const turno=document.getElementById('edit-colab-turno-'+key).value||'ambos';
   if(!nome || !email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)){
     showToast('⚠️ Preencha nome e um e-mail válido.');
     return;
@@ -1431,7 +1500,7 @@ async function salvarEdicaoColaborador(key){
   const snapAntigo=await db.ref('/colaboradores_autorizados/'+key).get();
   const antigo=snapAntigo.val();
   const criadoEm=(antigo && typeof antigo==='object' && antigo.criadoEm) || Date.now();
-  const dadosNovos={nome, email, unidade, gestor, ativo:true, criadoEm};
+  const dadosNovos={nome, email, unidade, gestor, setor, turno, ativo:true, criadoEm};
   if(newKey===key){
     // e-mail não mudou — .update() também corrige registros antigos que eram só "true" em vez de objeto
     await db.ref('/colaboradores_autorizados/'+key).update(dadosNovos);
@@ -1449,6 +1518,8 @@ async function adicionarColaborador(){
   const email=document.getElementById('colab-novo-email').value.trim().toLowerCase();
   const unidade=document.getElementById('colab-novo-unidade').value;
   const gestor=document.getElementById('colab-novo-gestor').checked;
+  const setor=document.getElementById('colab-novo-setor').value;
+  const turno=document.getElementById('colab-novo-turno').value||'ambos';
   const erro=document.getElementById('colab-erro');
   erro.style.display='none';
   if(!nome || !email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)){
@@ -1456,10 +1527,12 @@ async function adicionarColaborador(){
     erro.style.display='block';
     return;
   }
-  await db.ref('/colaboradores_autorizados/'+emailKey(email)).set({nome,email,unidade,gestor,ativo:true,criadoEm:Date.now()});
+  await db.ref('/colaboradores_autorizados/'+emailKey(email)).set({nome,email,unidade,gestor,setor,turno,ativo:true,criadoEm:Date.now()});
   document.getElementById('colab-novo-nome').value='';
   document.getElementById('colab-novo-email').value='';
   document.getElementById('colab-novo-gestor').checked=false;
+  document.getElementById('colab-novo-setor').value='';
+  document.getElementById('colab-novo-turno').value='ambos';
   showToast('✅ '+nome+' cadastrado(a)!');
   await carregarColaboradoresGer();
 }
@@ -1846,6 +1919,55 @@ function atualizarBannerConexao(){
 window.addEventListener('online',atualizarBannerConexao);
 window.addEventListener('offline',atualizarBannerConexao);
 document.addEventListener('DOMContentLoaded',atualizarBannerConexao);
+
+/* ── VERSÃO COMPUTADOR (menu lateral + seletor 📱/🖥️) ── */
+function modoTelaAtual(){ let m=null; try{ m=localStorage.getItem('modoTela'); }catch(e){} if(m==='desk'||m==='mob') return m; return window.innerWidth>=1024?'desk':'mob'; }
+function setModoTela(m){ try{ localStorage.setItem('modoTela',m); }catch(e){} aplicarModoTela(); }
+function telaAtivaId(){ const s=document.querySelector('.screen.active'); return s?s.id.replace('screen-',''):''; }
+function sideIrGestao(tab){ if(telaAtivaId()!=='gestao') abrirGestao(); abrirTabGestao(tab); }
+function sideIrHome(){ if(telaAtivaId()==='gestao') fecharGestao(); }
+function aplicarModoTela(){
+  const desk=modoTelaAtual()==='desk';
+  const tela=telaAtivaId();
+  const mostra=desk && (tela==='home'||tela==='gestao');
+  document.body.classList.toggle('desk',desk);
+  document.body.classList.toggle('hasside',mostra);
+  const side=document.getElementById('side'); if(!side) return;
+  side.classList.toggle('on',mostra);
+  let fab=document.getElementById('modefab');
+  if(!fab){ fab=document.createElement('button'); fab.id='modefab'; fab.textContent='🖥️ Versão computador'; fab.style.cssText='position:fixed;right:14px;bottom:14px;z-index:70;padding:9px 13px;border-radius:20px;border:0;background:var(--verde);color:#fff;font-size:12px;font-weight:700;box-shadow:0 2px 8px rgba(0,0,0,.25);cursor:pointer;display:none'; fab.onclick=function(){ setModoTela('desk'); }; document.body.appendChild(fab); }
+  fab.style.display=(!desk && (tela==='home'||tela==='gestao') && window.innerWidth>=700)?'block':'none';
+  if(!mostra){ side.innerHTML=''; return; }
+  const tabSel=(document.querySelector('.tab-btn.sel')||{}).id||'';
+  const it=(rot,fn,on)=>'<button class="side-it'+(on?' on':'')+'" onclick="'+fn+'">'+rot+'</button>';
+  let h='<div class="side-brand">MSH Checklist</div><div class="side-sub">'+((typeof unidadeAtiva!=='undefined'&&unidadeAtiva)||'')+'<br>'+((googleUser&&googleUser.nome)||'')+'</div>';
+  h+=it('🏠 Checklist','sideIrHome()',tela==='home');
+  if(souGestor){
+    h+='<div class="side-sec">Gestão</div>';
+    [['tarefas','📝 Tarefas'],['responsaveis','🔁 Responsáveis'],['colaboradores','👥 Colaboradores'],['historico','🕘 Histórico'],['pontos','🏆 Pontos'],['problemas','⚠️ Problemas'],['folgas','🏖️ Folgas']].forEach(function(x){
+      h+=it(x[1],"sideIrGestao('"+x[0]+"')",tela==='gestao' && tabSel==='tabbtn-'+x[0]);
+    });
+    const sw=document.getElementById('unidade-switch');
+    if(sw && sw.style.display!=='none'){
+      h+='<div class="side-sec">Unidade</div>';
+      h+=it('Cali Cravings',"trocarUnidadeAtiva('CALI CRAVINGS')",unidadeAtiva==='CALI CRAVINGS');
+      h+=it('Texas Country Bar',"trocarUnidadeAtiva('TEXAS COUNTRY BAR')",unidadeAtiva==='TEXAS COUNTRY BAR');
+    }
+  }
+  h+='<div class="side-grow"></div><div class="modeseg"><button onclick="setModoTela(\'mob\')">📱 Celular</button><button class="on" onclick="setModoTela(\'desk\')">🖥️ Computador</button></div>';
+  h+=it('🚪 Sair','sair()',false);
+  side.innerHTML=h;
+}
+(function(){
+  let tmr=null;
+  const obs=new MutationObserver(function(muts){
+    if(!muts.some(m=>m.target.classList && (m.target.classList.contains('screen')||m.target.classList.contains('tab-btn')))) return;
+    clearTimeout(tmr); tmr=setTimeout(aplicarModoTela,30);
+  });
+  obs.observe(document.body,{subtree:true,attributes:true,attributeFilter:['class']});
+  window.addEventListener('resize',function(){ clearTimeout(tmr); tmr=setTimeout(aplicarModoTela,150); });
+  aplicarModoTela();
+})();
 </script>
 </body>
 </html>
