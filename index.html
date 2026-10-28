@@ -242,17 +242,16 @@ body.desk #colab-lista{display:grid;grid-template-columns:repeat(auto-fill,minma
 <div class="overlay" id="overlay-whats">
   <div class="modal">
     <h3>✅ Checklist concluído</h3>
-    <p style="font-size:13px;color:var(--muted);margin-bottom:10px">Envie a foto no grupo do WhatsApp do checklist para avisar a equipe e a gestão.</p>
-    <img id="whats-preview" class="thumb" style="display:none;margin:0 auto 10px">
-    <button class="btn btn-primary btn-block" style="background:#1f9d55" onclick="compartilharChecklist()">📲 Enviar no grupo do WhatsApp</button>
-    <p style="font-size:11.5px;color:var(--muted);margin-top:8px">Ao tocar, escolha o WhatsApp e depois o grupo. No computador, a foto é baixada e o WhatsApp abre com a mensagem pronta — é só anexar.</p>
+    <p style="font-size:13px;color:var(--muted);margin-bottom:10px">Envie o aviso no grupo do WhatsApp do checklist para informar a equipe e a gestão.</p>
+        <button class="btn btn-primary btn-block" style="background:#1f9d55" onclick="compartilharChecklist()">📲 Enviar no grupo do WhatsApp</button>
+    <p style="font-size:11.5px;color:var(--muted);margin-top:8px">Ao tocar, escolha o WhatsApp e depois o grupo. A mensagem já vai pronta, é só enviar.</p>
     <button class="btn btn-outline btn-block" style="margin-top:10px" onclick="document.getElementById('overlay-whats').classList.remove('on')">Fechar</button>
   </div>
 </div>
 <div class="overlay" id="overlay-concluir">
   <div class="modal">
     <h3 id="concluir-titulo">Validar turno</h3>
-    <p id="concluir-sub">Suas tarefas foram concluídas. Tire uma selfie pra confirmar.</p>
+    <p id="concluir-sub">Suas tarefas foram concluídas. Confirme sua localização para finalizar.</p>
     <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
       <div id="geo-status" style="flex:1;font-size:12.5px;color:var(--muted)">📍 Verificando localização...</div>
       <button type="button" class="btn btn-outline" id="btn-geo-refresh" onclick="verificarLocalizacao()" title="Atualizar localização" style="padding:8px 10px">🔄</button>
@@ -264,7 +263,7 @@ body.desk #colab-lista{display:grid;grid-template-columns:repeat(auto-fill,minma
     <p id="concluir-erro" class="msg-erro"></p>
     <div style="display:flex;gap:8px;margin-top:14px">
       <button class="btn btn-outline" style="flex:1" onclick="fecharConcluir()">Cancelar</button>
-      <button class="btn btn-primary" style="flex:1" id="btn-tirar-foto" onclick="tirarFoto()">📷 Tirar foto</button>
+      <button class="btn btn-primary" style="flex:1;display:none" id="btn-tirar-foto" onclick="tirarFoto()">📷 Tirar foto</button>
       <button class="btn btn-primary" style="flex:1;display:none" id="btn-confirmar-conclusao" onclick="confirmarValidacaoTurno()">✅ Confirmar</button>
     </div>
   </div>
@@ -393,7 +392,7 @@ body.desk #colab-lista{display:grid;grid-template-columns:repeat(auto-fill,minma
           <input type="number" min="0" id="cfg-bonus-prazo" onchange="salvarConfigPontos()">
         </div>
         <div class="fld" style="margin-bottom:0">
-          <label>Bônus por validar as próprias tarefas com foto</label>
+          <label>Bônus por concluir as próprias tarefas</label>
           <input type="number" min="0" id="cfg-bonus-turno" onchange="salvarConfigPontos()">
         </div>
         <p style="font-size:11.5px;color:var(--muted);margin-top:8px">A pontuação de cada tarefa é editada em Gestão → Tarefas. Esses dois valores aqui são só os bônus extras.</p>
@@ -851,7 +850,7 @@ function renderChecklist(){
         <button class="btn btn-primary btn-block" style="background:#1f9d55;margin-top:8px" onclick="abrirOverlayWhats()">📲 Enviar no grupo do WhatsApp</button>
       </div>`;
     }else if(meusFeitos===meus.length){
-      areaHtml+=`<button class="btn btn-primary btn-block" onclick="abrirValidarTurno()">📸 Validar minhas tarefas com foto (+${PTS_BONUS_TURNO} pts)</button>`;
+      areaHtml+=`<button class="btn btn-primary btn-block" onclick="abrirValidarTurno()">📲 Concluir e enviar no WhatsApp (+${PTS_BONUS_TURNO} pts)</button>`;
     }
   }
   if(exibirTudo){
@@ -980,8 +979,8 @@ function abrirValidarTurno(){
   document.getElementById('concluir-erro').style.display='none';
   document.getElementById('cam-preview').style.display='none';
   document.getElementById('cam-video').style.display='none';
-  document.getElementById('btn-tirar-foto').style.display='inline-flex';
-  document.getElementById('btn-confirmar-conclusao').style.display='none';
+  document.getElementById('btn-tirar-foto').style.display='none';
+  document.getElementById('btn-confirmar-conclusao').style.display='inline-flex';
   document.getElementById('geo-status').textContent='📍 Verificando localização...';
   document.getElementById('overlay-concluir').classList.add('on');
   verificarLocalizacao();
@@ -1086,39 +1085,30 @@ function fecharConcluir(){
 }
 function abrirOverlayWhats(){
   const ek=googleUser?emailKey(googleUser.email):'';
-  const foto=_fotoGrande||((validacoesCache[ek]||{}).selfie)||null;
-  const img=document.getElementById('whats-preview');
-  if(foto){ img.src=foto; img.style.display='block'; } else { img.style.display='none'; }
   document.getElementById('overlay-whats').classList.add('on');
 }
 async function compartilharChecklist(){
   const ek=googleUser?emailKey(googleUser.email):'';
-  const foto=_fotoGrande||((validacoesCache[ek]||{}).selfie)||null;
   const meus=meusIds(Object.keys(tarefasCache));
   const feitas=meus.filter(id=>execDe(id)).length;
   const val=validacoesCache[ek];
   const hora=new Date(val&&val.timestamp?val.timestamp:Date.now()).toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'});
   const texto='✅ *CHECKLIST CONCLUÍDO*\n🏠 '+unidadeAtiva+'\n'+(turnoSel==='dia'?'☀️ Turno Dia':'🌙 Turno Noite')+' · '+formatarDataBR(dataOperacional())+'\n👤 '+googleUser.nome+'\n📋 '+feitas+'/'+meus.length+' tarefas · validado às '+hora;
   try{
-    if(foto && navigator.canShare && navigator.share){
-      const blob=await (await fetch(foto)).blob();
-      const file=new File([blob],'checklist-concluido.jpg',{type:'image/jpeg'});
-      if(navigator.canShare({files:[file]})){ await navigator.share({files:[file],text:texto,title:'Checklist concluído'}); return; }
-    }
+    if(navigator.share && /Android|iPhone|iPad|iPod/i.test(navigator.userAgent)){ await navigator.share({text:texto,title:'Checklist concluído'}); return; }
   }catch(e){ if(e && e.name==='AbortError') return; }
-  // sem compartilhamento nativo (ex.: computador): baixa a foto e abre o WhatsApp com a mensagem pronta
-  if(foto){ const a=document.createElement('a'); a.href=foto; a.download='checklist-concluido.jpg'; document.body.appendChild(a); a.click(); a.remove(); }
   window.open('https://wa.me/?text='+encodeURIComponent(texto),'_blank');
-  showToast(foto?'📎 Foto baixada — anexe no grupo do WhatsApp.':'Abra o grupo e envie a mensagem.');
+  showToast('Abra o grupo e envie a mensagem.');
 }
 async function confirmarValidacaoTurno(){
-  if(!_geoOk || !_fotoBase64 || !googleUser) return;
+  if(!googleUser) return;
+  if(!_geoOk){ const er=document.getElementById('concluir-erro'); er.textContent='Você precisa estar dentro do restaurante e com a localização confirmada para concluir.'; er.style.display='block'; return; }
   const uk=unidadeKey(unidadeAtiva);
   const ek=emailKey(googleUser.email);
 
   const registro={
     email:googleUser.email, nome:googleUser.nome, timestamp:Date.now(),
-    selfie:_fotoBase64, lat:_geoLat, lng:_geoLng
+    lat:_geoLat, lng:_geoLng
   };
   try{
     await db.ref('/validacoes/'+uk+'/'+dataOperacional()+'/'+turnoSel+'/'+ek).set(registro);
