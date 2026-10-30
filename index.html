@@ -14,6 +14,8 @@
 <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-database-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-auth-compat.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
 <style>
 :root{
   --verde:#2C3E35;--verde-esc:#1D2A24;--areia:#F5F0E8;--branco:#fff;
@@ -409,7 +411,7 @@ body.desk #colab-lista{display:grid;grid-template-columns:repeat(auto-fill,minma
       </div>
       <div class="card">
         <div style="font-weight:700;font-size:12px;color:var(--muted);text-transform:uppercase;margin-bottom:8px">Relatório de cumprimento</div>
-        <p style="font-size:11.5px;color:var(--muted);margin-bottom:8px">Baixa um arquivo com quem concluiu (ou não) as tarefas de um dia, pra importar no Gestão Masha.</p>
+        <p style="font-size:11.5px;color:var(--muted);margin-bottom:8px">Gera um relatório em PDF com quem concluiu (ou não) as tarefas no período.</p>
         <div style="display:flex;gap:8px;margin-bottom:8px">
           <div style="flex:1">
             <label style="font-size:11px;color:var(--muted);display:block;margin-bottom:4px">De</label>
@@ -420,7 +422,8 @@ body.desk #colab-lista{display:grid;grid-template-columns:repeat(auto-fill,minma
             <input type="date" id="rel-data-fim" style="width:100%;padding:10px;border-radius:10px;border:1px solid var(--bdr);background:var(--surf2);font-size:14px">
           </div>
         </div>
-        <button class="btn" onclick="exportarRelatorioChecklist()">⬇️ Baixar relatório do período</button>
+        <button class="btn" onclick="exportarRelatorioChecklistPDF()">📄 Gerar relatório em PDF</button>
+        <button class="btn btn-outline" style="margin-top:8px" onclick="exportarRelatorioChecklist()">⬇️ Arquivo para o Gestão Masha (.json)</button>
       </div>
     </div>
 
@@ -1873,13 +1876,13 @@ function listaDatasRelatorio(ini, fim){
   return out;
 }
 
-async function exportarRelatorioChecklist(){
+async function coletarRelatorioChecklist(){
   const uk=unidadeKey(unidadeAtiva);
   const inputIni=document.getElementById('rel-data-inicio');
   const inputFim=document.getElementById('rel-data-fim');
   const dataIni = (inputIni && inputIni.value) ? inputIni.value : dataOperacional();
   const dataFim = (inputFim && inputFim.value) ? inputFim.value : dataIni;
-  if(dataFim < dataIni){ showToast('⚠️ A data final não pode ser antes da inicial.'); return; }
+  if(dataFim < dataIni){ showToast('⚠️ A data final não pode ser antes da inicial.'); return null; }
   const datas = listaDatasRelatorio(dataIni, dataFim);
   const turnos=['dia','noite'];
   const porColab={};
@@ -1927,6 +1930,12 @@ async function exportarRelatorioChecklist(){
     pontosNoPeriodo: c.pontos
   })).sort((a,b)=> a.percentual-b.percentual);
   const payload = { app:'checklist-operacional-msh', unidade:unidadeAtiva, dataInicio:dataIni, dataFim:dataFim, dias:datas.length, geradoEm:new Date().toISOString(), colaboradores:linhas };
+  return {payload, linhas, datas, dataIni, dataFim};
+}
+// Arquivo .json (só para importar no Gestão Masha)
+async function exportarRelatorioChecklist(){
+  const r=await coletarRelatorioChecklist(); if(!r) return;
+  const {payload,linhas,datas,dataIni,dataFim}=r;
   const nomeArq = dataIni===dataFim ? ('checklist_'+unidadeKey(unidadeAtiva)+'_'+dataIni+'.json') : ('checklist_'+unidadeKey(unidadeAtiva)+'_'+dataIni+'_a_'+dataFim+'.json');
   const blob = new Blob([JSON.stringify(payload,null,2)], {type:'application/json'});
   const url = URL.createObjectURL(blob);
@@ -1934,7 +1943,46 @@ async function exportarRelatorioChecklist(){
   a.href=url; a.download=nomeArq;
   document.body.appendChild(a); a.click(); a.remove();
   URL.revokeObjectURL(url);
-  showToast('✅ Relatório baixado ('+linhas.length+' registro(s), '+datas.length+' dia(s)).');
+  showToast('✅ Arquivo do Gestão Masha baixado ('+linhas.length+' registro(s), '+datas.length+' dia(s)).');
+}
+// Relatório em PDF
+async function exportarRelatorioChecklistPDF(){
+  if(!(window.jspdf && window.jspdf.jsPDF)){ showToast('⚠️ O gerador de PDF ainda está carregando. Tente de novo em instantes.'); return; }
+  const r=await coletarRelatorioChecklist(); if(!r) return;
+  const {linhas,datas,dataIni,dataFim}=r;
+  if(!linhas.length){ showToast('Nenhum registro no período.'); return; }
+  const L=function(s){ return String(s==null?'':s).replace(/[^\u0000-\u00FF]/g,'').trim(); };
+  const br=function(iso){ const p=iso.split('-'); return p[2]+'/'+p[1]+'/'+p[0]; };
+  const doc=new window.jspdf.jsPDF({unit:'pt',format:'a4'});
+  const M=30;
+  doc.setFillColor(15,44,54); doc.rect(0,0,595,62,'F');
+  doc.setTextColor(184,146,58); doc.setFont(undefined,'bold'); doc.setFontSize(10); doc.text('MASHA GROUP',M,24);
+  doc.setTextColor(255,255,255); doc.setFontSize(15); doc.text('Relatorio de cumprimento do Checklist',M,44);
+  doc.setFont(undefined,'normal'); doc.setFontSize(10); doc.setTextColor(60,60,60);
+  let y=82;
+  doc.text('Unidade: '+L(unidadeAtiva)+'   |   Periodo: '+(dataIni===dataFim?br(dataIni):br(dataIni)+' a '+br(dataFim))+' ('+datas.length+' dia'+(datas.length>1?'s':'')+')',M,y); y+=14;
+  doc.text('Gerado em '+new Date().toLocaleString('pt-BR'),M,y); y+=14;
+  const tot=linhas.reduce(function(s,c){ s.a+=c.atribuidas; s.c+=c.concluidas; s.p+=c.pontosNoPeriodo; return s; },{a:0,c:0,p:0});
+  const pctGeral=tot.a>0?Math.round(tot.c/tot.a*100):0;
+  doc.setFont(undefined,'bold'); doc.setTextColor(15,44,54);
+  doc.text('Cumprimento geral: '+pctGeral+'%  ('+tot.c+' de '+tot.a+' tarefas concluidas)',M,y+4); y+=12;
+  const ord=linhas.slice().sort(function(a,b){ return (a.turno===b.turno?0:(a.turno==='dia'?-1:1)) || L(a.nome).localeCompare(L(b.nome)); });
+  doc.autoTable({
+    startY:y+4,
+    head:[['Colaborador','Turno','Atribuidas','Concluidas','%','Validou','Pontos']],
+    body:ord.map(function(c){ return [L(c.nome||c.email), c.turno==='dia'?'Dia':'Noite', String(c.atribuidas), String(c.concluidas), c.percentual+'%', c.validouSelfie?'Sim':'Nao', String(c.pontosNoPeriodo)]; }),
+    foot:[['TOTAL','',String(tot.a),String(tot.c),pctGeral+'%','',String(tot.p)]], showFoot:'lastPage',
+    styles:{fontSize:9,font:'helvetica',cellPadding:4}, headStyles:{fillColor:[15,44,54],textColor:[255,255,255],fontStyle:'bold'},
+    footStyles:{fillColor:[247,245,239],textColor:[15,44,54],fontStyle:'bold'},
+    alternateRowStyles:{fillColor:[250,248,243]},
+    columnStyles:{1:{halign:'center'},2:{halign:'right'},3:{halign:'right'},4:{halign:'right',fontStyle:'bold'},5:{halign:'center'},6:{halign:'right'}},
+    didParseCell:function(d){ if(d.section==='body' && d.column.index===4){ const v=parseInt(d.cell.raw,10); d.cell.styles.textColor = v>=90?[29,122,95]:(v>=60?[184,134,11]:[176,58,46]); } },
+    margin:{left:M,right:M}
+  });
+  const pages=doc.getNumberOfPages();
+  for(let p=1;p<=pages;p++){ doc.setPage(p); doc.setFontSize(8); doc.setTextColor(120,120,120); doc.text('Pagina '+p+' de '+pages,520,820); }
+  doc.save('checklist_'+unidadeKey(unidadeAtiva)+'_'+dataIni+(dataIni===dataFim?'':('_a_'+dataFim))+'.pdf');
+  showToast('📄 PDF gerado ('+linhas.length+' colaborador(es), '+datas.length+' dia(s)).');
 }
 
 async function zerarPontuacaoTodos(){
