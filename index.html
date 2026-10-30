@@ -1888,48 +1888,103 @@ async function coletarRelatorioChecklist(){
   const porColab={};
   const _csRel=await db.ref('/colaboradores_autorizados').get();
   const colabsRel=_csRel.exists()?Object.values(_csRel.val()).filter(c=>c.unidade===unidadeAtiva && c.ativo!==false):[];
+  const tarefasT={}, respT={};
+  for(const turno of turnos){
+    const [ts,rs]=await Promise.all([db.ref('/tarefas/'+uk+'/'+turno).get(), db.ref('/responsaveis/'+uk+'/'+turno).get()]);
+    tarefasT[turno]=ts.exists()?ts.val():{};
+    respT[turno]=rs.exists()?rs.val():{};
+  }
+  const mk=function(turno,email,nome){
+    const k=turno+'|'+email;
+    if(!porColab[k]) porColab[k]={nome:nome,email:email,turno:turno,atribuidas:0,concluidas:0,pontos:0,diasComTarefa:0,diasValidou:0,validou:false,detalhe:[],diasLista:[]};
+    return porColab[k];
+  };
+  const rodAuto=function(lista,turno,ordem,dataStr){
+    lista=colabsDoTurno(lista,turno);
+    if(!lista.length) return null;
+    const desloc = turno==='noite' ? Math.ceil(lista.length/2) : 0;
+    const dias=Math.floor((new Date(dataStr+'T12:00:00').getTime()-RODIZIO_EPOCH.getTime())/86400000);
+    const sem=Math.floor(dias/7);
+    return lista[(((ordem+sem+desloc)%lista.length)+lista.length)%lista.length];
+  };
+  const hhmm=function(ts){ if(!ts) return '-'; const d=new Date(ts); return String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0'); };
   for(const dataStr of datas){
     for(const turno of turnos){
-      const [respSnap,execSnap,valSnap] = await Promise.all([
-        db.ref('/responsaveis/'+uk+'/'+turno).get(),
+      const [execSnap,valSnap,folSnap] = await Promise.all([
         db.ref('/execucoes/'+uk+'/'+dataStr+'/'+turno).get(),
-        db.ref('/validacoes/'+uk+'/'+dataStr+'/'+turno).get()
+        db.ref('/validacoes/'+uk+'/'+dataStr+'/'+turno).get(),
+        db.ref('/folgas/'+uk+'/'+dataStr+'/'+turno).get()
       ]);
-      const resp = respSnap.exists()?respSnap.val():{};
       const exec = execSnap.exists()?execSnap.val():{};
       const val = valSnap.exists()?valSnap.val():{};
-      Object.values(resp).forEach(r=>{
-        if(r && r.todos){ colabsRel.forEach(c=>{ const k=turno+'|'+c.email; if(!porColab[k]) porColab[k]={nome:c.nome,email:c.email,turno,atribuidas:0,concluidas:0,pontos:0,diasComTarefa:0,diasCompletos:0}; porColab[k].atribuidas++; }); return; }
-        if(!r.email) return;
-        const k=turno+'|'+r.email;
-        if(!porColab[k]) porColab[k]={nome:r.nome,email:r.email,turno,atribuidas:0,concluidas:0,pontos:0,diasComTarefa:0,diasCompletos:0};
-        porColab[k].atribuidas++;
-        porColab[k].diasComTarefa++;
+      const folgas = folSnap.exists()?folSnap.val():{};
+      // dia sem nenhum registro (turno fechado) não entra no relatório
+      if(!Object.keys(exec).length && !Object.keys(val).length) continue;
+      const tarefas=tarefasT[turno], resp=respT[turno];
+      const ids=Object.keys(tarefas).sort(function(a,b){ return (tarefas[a].ordem||0)-(tarefas[b].ordem||0); });
+      const doDia={};
+      const reg=function(p,tarefa,status,e,nota){
+        doDia[p.email]=doDia[p.email]||{p:p,tot:0,ok:0};
+        doDia[p.email].tot++;
+        p.atribuidas++;
+        if(status==='Feita'){ p.concluidas++; p.pontos+=(e&&e.pontos)||0; doDia[p.email].ok++; }
+        p.detalhe.push({data:dataStr,tarefa:tarefa,status:status+(nota?' ('+nota+')':''),feita:status==='Feita',hora:e?hhmm(e.timestamp):'-',prazo:e?(e.noPrazo?'No prazo':'Fora do prazo'):'-'});
+      };
+      ids.forEach(function(id){
+        const t=tarefas[id]||{}; const r=resp[id]||{};
+        if(r.pausada) return;
+        let alvos=[];
+        if(r.todos){ alvos=colabsDoTurno(colabsRel,turno).map(function(c){ return {email:c.email,nome:c.nome}; }); }
+        else{
+          let base = r.email ? {email:r.email,nome:r.nome}
+            : (r.rodizioSetor ? rodAuto(colabsRel.filter(function(c){ return c.setor===r.rodizioSetor; }),turno,t.ordem||0,dataStr) : rodAuto(colabsRel,turno,t.ordem||0,dataStr));
+          if(base){
+            const f=folgas[emailKey(base.email)];
+            if(f && f.substitutoEmail) base={email:f.substitutoEmail,nome:f.substitutoNome};
+            alvos=[base];
+          }
+        }
+        const feitos=Object.keys(exec).filter(function(k){ return k===id || k.indexOf(id+'__')===0; }).map(function(k){ return exec[k]; });
+        const usados=[];
+        alvos.forEach(function(a){
+          const p=mk(turno,a.email,a.nome);
+          const e=feitos.find(function(x){ return x.email===a.email; });
+          if(e){ usados.push(e); reg(p,t.nome||id,'Feita',e); }
+          else{
+            const outro=r.todos?null:feitos.find(function(x){ return usados.indexOf(x)<0 && !alvos.some(function(z){ return z.email===x.email; }); });
+            reg(p,t.nome||id,'Pendente',null,outro?'feita por '+(outro.nome||outro.email):'');
+          }
+        });
+        feitos.forEach(function(x){
+          if(usados.indexOf(x)>=0 || !x.email) return;
+          if(alvos.some(function(z){ return z.email===x.email; })) return;
+          reg(mk(turno,x.email,x.nome),t.nome||id,'Feita',x,'cobrindo outro colaborador');
+        });
       });
-      Object.values(exec).forEach(e=>{
-        if(!e.email) return;
-        const k=turno+'|'+e.email;
-        if(!porColab[k]) porColab[k]={nome:e.nome,email:e.email,turno,atribuidas:0,concluidas:0,pontos:0,diasComTarefa:0,diasCompletos:0};
-        porColab[k].concluidas++;
-        porColab[k].pontos += (e.pontos||0);
+      Object.keys(doDia).forEach(function(em){
+        const o=doDia[em]; const v=!!val[emailKey(em)];
+        o.p.diasComTarefa++;
+        if(v){ o.p.diasValidou++; o.p.validou=true; }
+        o.p.diasLista.push({data:dataStr,feitas:o.ok,total:o.tot,validou:v});
       });
-      Object.keys(val).forEach(ek=>{
-        const v=val[ek];
-        if(!v.email) return;
-        const k=turno+'|'+v.email;
-        if(!porColab[k]) porColab[k]={nome:v.nome,email:v.email,turno,atribuidas:0,concluidas:0,pontos:0,diasComTarefa:0,diasCompletos:0};
-        porColab[k].validou=true;
+      Object.keys(val).forEach(function(ek){
+        const v=val[ek]; if(!v || !v.email) return;
+        const p=mk(turno,v.email,v.nome);
+        if(!p.diasLista.some(function(d){ return d.data===dataStr; })){ p.validou=true; p.diasValidou++; p.diasComTarefa++; p.diasLista.push({data:dataStr,feitas:0,total:0,validou:true}); }
       });
     }
   }
-  const linhas = Object.values(porColab).map(c=>({
+  const linhas = Object.values(porColab).map(function(c){ return {
     nome:c.nome, email:c.email, turno:c.turno,
     atribuidas:c.atribuidas, concluidas:c.concluidas,
     percentual: c.atribuidas>0 ? Math.round(c.concluidas/c.atribuidas*100) : (c.concluidas>0?100:0),
     validouSelfie: !!c.validou,
-    pontosNoPeriodo: c.pontos
-  })).sort((a,b)=> a.percentual-b.percentual);
-  const payload = { app:'checklist-operacional-msh', unidade:unidadeAtiva, dataInicio:dataIni, dataFim:dataFim, dias:datas.length, geradoEm:new Date().toISOString(), colaboradores:linhas };
+    diasValidou:c.diasValidou, diasComTarefa:c.diasComTarefa,
+    pontosNoPeriodo: c.pontos,
+    detalhe:c.detalhe, diasLista:c.diasLista
+  }; }).sort(function(a,b){ return a.percentual-b.percentual; });
+  const payload = { app:'checklist-operacional-msh', unidade:unidadeAtiva, dataInicio:dataIni, dataFim:dataFim, dias:datas.length, geradoEm:new Date().toISOString(),
+    colaboradores:linhas.map(function(c){ return {nome:c.nome,email:c.email,turno:c.turno,atribuidas:c.atribuidas,concluidas:c.concluidas,percentual:c.percentual,validouSelfie:c.validouSelfie,pontosNoPeriodo:c.pontosNoPeriodo}; }) };
   return {payload, linhas, datas, dataIni, dataFim};
 }
 // Arquivo .json (só para importar no Gestão Masha)
@@ -1951,7 +2006,7 @@ async function exportarRelatorioChecklistPDF(){
   const r=await coletarRelatorioChecklist(); if(!r) return;
   const {linhas,datas,dataIni,dataFim}=r;
   if(!linhas.length){ showToast('Nenhum registro no período.'); return; }
-  const L=function(s){ return String(s==null?'':s).replace(/[^\u0000-\u00FF]/g,'').trim(); };
+  const L=function(s){ return String(s==null?'':s).replace(/[^\u0000-ÿ]/g,'').trim(); };
   const br=function(iso){ const p=iso.split('-'); return p[2]+'/'+p[1]+'/'+p[0]; };
   const doc=new window.jspdf.jsPDF({unit:'pt',format:'a4'});
   const M=30;
@@ -1962,16 +2017,16 @@ async function exportarRelatorioChecklistPDF(){
   let y=82;
   doc.text('Unidade: '+L(unidadeAtiva)+'   |   Periodo: '+(dataIni===dataFim?br(dataIni):br(dataIni)+' a '+br(dataFim))+' ('+datas.length+' dia'+(datas.length>1?'s':'')+')',M,y); y+=14;
   doc.text('Gerado em '+new Date().toLocaleString('pt-BR'),M,y); y+=14;
-  const tot=linhas.reduce(function(s,c){ s.a+=c.atribuidas; s.c+=c.concluidas; s.p+=c.pontosNoPeriodo; return s; },{a:0,c:0,p:0});
+  const tot=linhas.reduce(function(s,c){ s.a+=c.atribuidas; s.c+=c.concluidas; s.p+=c.pontosNoPeriodo; s.v+=c.diasValidou; s.d+=c.diasComTarefa; return s; },{a:0,c:0,p:0,v:0,d:0});
   const pctGeral=tot.a>0?Math.round(tot.c/tot.a*100):0;
   doc.setFont(undefined,'bold'); doc.setTextColor(15,44,54);
   doc.text('Cumprimento geral: '+pctGeral+'%  ('+tot.c+' de '+tot.a+' tarefas concluidas)',M,y+4); y+=12;
   const ord=linhas.slice().sort(function(a,b){ return (a.turno===b.turno?0:(a.turno==='dia'?-1:1)) || L(a.nome).localeCompare(L(b.nome)); });
   doc.autoTable({
     startY:y+4,
-    head:[['Colaborador','Turno','Atribuidas','Concluidas','%','Validou','Pontos']],
-    body:ord.map(function(c){ return [L(c.nome||c.email), c.turno==='dia'?'Dia':'Noite', String(c.atribuidas), String(c.concluidas), c.percentual+'%', c.validouSelfie?'Sim':'Nao', String(c.pontosNoPeriodo)]; }),
-    foot:[['TOTAL','',String(tot.a),String(tot.c),pctGeral+'%','',String(tot.p)]], showFoot:'lastPage',
+    head:[['Colaborador','Turno','Atribuidas','Concluidas','%','Checklist validado','Pontos']],
+    body:ord.map(function(c){ return [L(c.nome||c.email), c.turno==='dia'?'Dia':'Noite', String(c.atribuidas), String(c.concluidas), c.percentual+'%', c.diasValidou+' de '+c.diasComTarefa+' dia(s)', String(c.pontosNoPeriodo)]; }),
+    foot:[['TOTAL','',String(tot.a),String(tot.c),pctGeral+'%',tot.v+' de '+tot.d,String(tot.p)]], showFoot:'lastPage',
     styles:{fontSize:9,font:'helvetica',cellPadding:4}, headStyles:{fillColor:[15,44,54],textColor:[255,255,255],fontStyle:'bold'},
     footStyles:{fillColor:[247,245,239],textColor:[15,44,54],fontStyle:'bold'},
     alternateRowStyles:{fillColor:[250,248,243]},
@@ -1979,6 +2034,46 @@ async function exportarRelatorioChecklistPDF(){
     didParseCell:function(d){ if(d.section==='body' && d.column.index===4){ const v=parseInt(d.cell.raw,10); d.cell.styles.textColor = v>=90?[29,122,95]:(v>=60?[184,134,11]:[176,58,46]); } },
     margin:{left:M,right:M}
   });
+  // Detalhe por colaborador: quais eram as tarefas, quais foram feitas e se validou o checklist
+  const detalhado=datas.length<=7;
+  let yy=doc.lastAutoTable.finalY+24;
+  doc.setFont(undefined,'bold'); doc.setFontSize(12); doc.setTextColor(15,44,54);
+  if(yy>740){ doc.addPage(); yy=40; }
+  doc.text('Detalhamento por colaborador',M,yy); yy+=6;
+  doc.setFont(undefined,'normal'); doc.setFontSize(8); doc.setTextColor(110,110,110);
+  doc.text(detalhado?'Todas as tarefas do periodo, com a situacao de cada uma.':'Periodo longo: sao listadas apenas as tarefas pendentes (resumo por dia abaixo).',M,yy+10); yy+=24;
+  ord.forEach(function(c){
+    if(yy>720){ doc.addPage(); yy=40; }
+    doc.setFont(undefined,'bold'); doc.setFontSize(11); doc.setTextColor(15,44,54);
+    doc.text(L(c.nome||c.email)+'  -  Turno '+(c.turno==='dia'?'Dia':'Noite'),M,yy);
+    doc.setFont(undefined,'normal'); doc.setFontSize(9); doc.setTextColor(80,80,80);
+    doc.text(c.concluidas+' de '+c.atribuidas+' tarefas ('+c.percentual+'%)   |   Checklist validado em '+c.diasValidou+' de '+c.diasComTarefa+' dia(s)',M,yy+12);
+    const valDia={}; c.diasLista.forEach(function(d){ valDia[d.data]=d.validou; });
+    const itens=c.detalhe.slice().sort(function(a,b){ return a.data<b.data?-1:(a.data>b.data?1:(a.feita===b.feita?0:(a.feita?1:-1))); });
+    const mostrar=itens.filter(function(d){ return detalhado || !d.feita; });
+    if(mostrar.length){
+      doc.autoTable({
+        startY:yy+18,
+        head:[['Data','Tarefa','Situacao','Hora','Prazo','Checklist validado']],
+        body:mostrar.map(function(d){ return [br(d.data), L(d.tarefa), L(d.status), d.hora, d.prazo, valDia[d.data]?'Sim':'Nao']; }),
+        styles:{fontSize:8,font:'helvetica',cellPadding:3}, headStyles:{fillColor:[90,110,118],textColor:[255,255,255],fontStyle:'bold'},
+        alternateRowStyles:{fillColor:[250,248,243]},
+        columnStyles:{0:{cellWidth:52},3:{halign:'center',cellWidth:36},4:{halign:'center',cellWidth:58},5:{halign:'center',cellWidth:78}},
+        didParseCell:function(d){
+          if(d.section!=='body') return;
+          if(d.column.index===2){ d.cell.styles.textColor = String(d.cell.raw).indexOf('Feita')===0?[29,122,95]:[176,58,46]; d.cell.styles.fontStyle='bold'; }
+          if(d.column.index===5){ d.cell.styles.textColor = d.cell.raw==='Sim'?[29,122,95]:[176,58,46]; }
+        },
+        margin:{left:M,right:M}
+      });
+      yy=doc.lastAutoTable.finalY+20;
+    }else{
+      doc.setFontSize(9); doc.setTextColor(29,122,95); doc.text('Nenhuma tarefa pendente no periodo.',M,yy+26); yy+=44;
+    }
+  });
+  if(yy>780){ doc.addPage(); yy=40; }
+  doc.setFont(undefined,'normal'); doc.setFontSize(7.5); doc.setTextColor(120,120,120);
+  doc.text('Obs.: as tarefas atribuidas seguem a configuracao atual de responsaveis/rodizio e as folgas registradas. Dias sem nenhum registro (turno fechado) nao entram.',M,yy,{maxWidth:535});
   const pages=doc.getNumberOfPages();
   for(let p=1;p<=pages;p++){ doc.setPage(p); doc.setFontSize(8); doc.setTextColor(120,120,120); doc.text('Pagina '+p+' de '+pages,520,820); }
   doc.save('checklist_'+unidadeKey(unidadeAtiva)+'_'+dataIni+(dataIni===dataFim?'':('_a_'+dataFim))+'.pdf');
