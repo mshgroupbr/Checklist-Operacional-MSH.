@@ -288,6 +288,7 @@ body.desk #colab-lista{display:grid;grid-template-columns:repeat(auto-fill,minma
       <button class="tab-btn" onclick="abrirTabGestao('pontos')" id="tabbtn-pontos">Pontos</button>
       <button class="tab-btn" onclick="abrirTabGestao('problemas')" id="tabbtn-problemas">Problemas</button>
       <button class="tab-btn" onclick="abrirTabGestao('folgas')" id="tabbtn-folgas">Folgas</button>
+<button class="tab-btn" onclick="abrirTabGestao('fototarefa')" id="tabbtn-fototarefa">Foto</button>
     </div>
 
     <div class="tab-pane on" id="tabpane-tarefas">
@@ -436,7 +437,8 @@ body.desk #colab-lista{display:grid;grid-template-columns:repeat(auto-fill,minma
       </div>
     </div>
 
-    <div class="tab-pane" id="tabpane-folgas">
+    <div class="tab-pane" id="tabpane-fototarefa"><div class="card"><div style="font-weight:700;font-size:12.5px;margin-bottom:8px;color:var(--muted);text-transform:uppercase">📸 Tarefa da foto</div><p style="font-size:12.5px;color:var(--muted);margin:0 0 10px">Defina, para cada colaborador, a tarefa que ele deve fotografar ao validar o turno. A foto sai em baixa resolução e vai junto com a mensagem do WhatsApp.</p><div id="fototarefa-lista"><p style="color:var(--muted);font-size:13px">Carregando...</p></div></div></div>
+<div class="tab-pane" id="tabpane-folgas">
       <div class="card">
         <div class="fld" style="margin-bottom:0">
           <label>📅 Dia</label>
@@ -1050,7 +1052,7 @@ async function tirarFoto(){
     return;
   }
   try{
-    _camStream=await navigator.mediaDevices.getUserMedia({video:{facingMode:'user'}});
+    _camStream=await navigator.mediaDevices.getUserMedia({video:{facingMode:(window._tarefaFotoReq?'environment':'user')}});
     const video=document.getElementById('cam-video');
     video.srcObject=_camStream; video.style.display='block';
     document.getElementById('btn-tirar-foto').textContent='📸 Capturar';
@@ -1068,10 +1070,10 @@ function capturarFrame(){
   ctx.drawImage(video,0,0,320,240);
   _fotoBase64=canvas.toDataURL('image/jpeg',0.6);
   try{ // versão maior da mesma foto, usada só para enviar no WhatsApp
-    const vw=video.videoWidth||640, vh=video.videoHeight||480, esc=Math.min(1,1024/vw);
+    const vw=video.videoWidth||640, vh=video.videoHeight||480, esc=Math.min(1,640/vw);
     const big=document.createElement('canvas'); big.width=Math.round(vw*esc); big.height=Math.round(vh*esc);
     big.getContext('2d').drawImage(video,0,0,big.width,big.height);
-    _fotoGrande=big.toDataURL('image/jpeg',0.85);
+    _fotoGrande=big.toDataURL('image/jpeg',0.5);
   }catch(e){ _fotoGrande=null; }
   if(_camStream){ _camStream.getTracks().forEach(t=>t.stop()); _camStream=null; }
   video.style.display='none';
@@ -1089,19 +1091,6 @@ function fecharConcluir(){
 function abrirOverlayWhats(){
   const ek=googleUser?emailKey(googleUser.email):'';
   document.getElementById('overlay-whats').classList.add('on');
-}
-async function compartilharChecklist(){
-  const ek=googleUser?emailKey(googleUser.email):'';
-  const meus=meusIds(Object.keys(tarefasCache));
-  const feitas=meus.filter(id=>execDe(id)).length;
-  const val=validacoesCache[ek];
-  const hora=new Date(val&&val.timestamp?val.timestamp:Date.now()).toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'});
-  const texto='✅ *CHECKLIST CONCLUÍDO*\n🏠 '+unidadeAtiva+'\n'+(turnoSel==='dia'?'☀️ Turno Dia':'🌙 Turno Noite')+' · '+formatarDataBR(dataOperacional())+'\n👤 '+googleUser.nome+'\n📋 '+feitas+'/'+meus.length+' tarefas · validado às '+hora;
-  try{
-    if(navigator.share && /Android|iPhone|iPad|iPod/i.test(navigator.userAgent)){ await navigator.share({text:texto,title:'Checklist concluído'}); return; }
-  }catch(e){ if(e && e.name==='AbortError') return; }
-  window.open('https://wa.me/?text='+encodeURIComponent(texto),'_blank');
-  showToast('Abra o grupo e envie a mensagem.');
 }
 async function confirmarValidacaoTurno(){
   if(!googleUser) return;
@@ -1817,6 +1806,89 @@ async function espelharColabsMasha(){
     });
     await dbMasha().ref().update(upd);
   }catch(e){ console.warn('espelho de colaboradores falhou', e); }
+}
+
+
+var _tarefaFotoReq = null;
+var _ftTarefas = {};
+function _ftEsc(s){ return String(s==null?'':s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];}); }
+async function carregarFotoTarefaGer(){
+  const con = document.getElementById('fototarefa-lista'); if(!con) return;
+  const uk = unidadeKey(unidadeAtiva);
+  const r = await Promise.all([
+    db.ref('/colaboradores_autorizados').get(),
+    db.ref('/tarefas/'+uk+'/dia').get(),
+    db.ref('/tarefas/'+uk+'/noite').get(),
+    db.ref('/tarefa_foto/'+uk).get()
+  ]);
+  const colabs = r[0].exists() ? Object.values(r[0].val()).filter(function(c){ return c && typeof c==='object' && c.unidade===unidadeAtiva && c.ativo!==false; }) : [];
+  const atrib = r[3].exists() ? r[3].val() : {};
+  _ftTarefas = {};
+  let opts = '';
+  [['dia','☀️ Dia',r[1]],['noite','🌙 Noite',r[2]]].forEach(function(g){
+    if(!g[2].exists()) return;
+    const ts = g[2].val(); const ids = Object.keys(ts).sort(function(a,b){ return (ts[a].ordem||0)-(ts[b].ordem||0); });
+    ids.forEach(function(id){ _ftTarefas[g[0]+'|'+id] = ts[id].nome; });
+  });
+  if(!colabs.length){ con.innerHTML = '<p style="color:var(--muted);font-size:13px">Nenhum colaborador ativo cadastrado nessa unidade.</p>'; return; }
+  colabs.sort(function(a,b){ return String(a.nome||'').localeCompare(String(b.nome||'')); });
+  con.innerHTML = colabs.map(function(c){
+    const a = atrib[emailKey(c.email)]; const atual = a ? (a.turno+'|'+a.tarefaId) : '';
+    let o = '<option value="">Sem foto de tarefa</option>';
+    ['dia','noite'].forEach(function(tn){
+      const grp = Object.keys(_ftTarefas).filter(function(k){ return k.indexOf(tn+'|')===0; });
+      if(!grp.length) return;
+      o += '<optgroup label="'+(tn==='dia'?'☀️ Turno Dia':'🌙 Turno Noite')+'">'+grp.map(function(k){ return '<option value="'+_ftEsc(k)+'"'+(k===atual?' selected':'')+'>'+_ftEsc(_ftTarefas[k])+'</option>'; }).join('')+'</optgroup>';
+    });
+    return '<div class="list-row" style="flex-wrap:wrap;gap:8px"><div style="flex:1;min-width:130px;font-size:13.5px;font-weight:600">'+_ftEsc(c.nome||c.email)+'</div><div class="fld" style="margin:0;flex:2;min-width:180px"><select onchange="salvarFotoTarefa(\''+_ftEsc(c.email)+'\',\''+_ftEsc(c.nome||'')+'\',this.value)">'+o+'</select></div></div>';
+  }).join('');
+}
+async function salvarFotoTarefa(email, nome, val){
+  const uk = unidadeKey(unidadeAtiva); const k = emailKey(email);
+  if(!val){ await db.ref('/tarefa_foto/'+uk+'/'+k).remove(); showToast('✅ Foto de tarefa removida.'); return; }
+  const p = val.split('|');
+  await db.ref('/tarefa_foto/'+uk+'/'+k).set({ email:email, nome:nome, turno:p[0], tarefaId:p[1], tarefaNome:_ftTarefas[val]||'' });
+  showToast('✅ '+(nome||email)+' vai fotografar: '+(_ftTarefas[val]||''));
+}
+(function(){
+  const _atg = abrirTabGestao;
+  abrirTabGestao = function(tab){ _atg(tab); if(tab==='fototarefa') carregarFotoTarefaGer(); };
+  const _avt = abrirValidarTurno;
+  abrirValidarTurno = async function(){
+    _tarefaFotoReq = null; _fotoGrande = null; _fotoBase64 = null;
+    let a = null;
+    try{ if(googleUser){ const s = await db.ref('/tarefa_foto/'+unidadeKey(unidadeAtiva)+'/'+emailKey(googleUser.email)).get(); if(s.exists()) a = s.val(); } }catch(e){}
+    _avt();
+    if(a && a.turno===turnoSel && document.getElementById('overlay-concluir').classList.contains('on')){
+      _tarefaFotoReq = a;
+      document.getElementById('concluir-titulo').textContent = '📸 Foto da tarefa: '+(a.tarefaNome||'');
+      document.getElementById('btn-confirmar-conclusao').style.display = 'none';
+      const b = document.getElementById('btn-tirar-foto'); b.style.display = 'inline-flex'; b.textContent = '📷 Tirar foto da tarefa'; b.onclick = tirarFoto;
+    }
+  };
+})();
+async function compartilharChecklist(){
+  const ek = googleUser ? emailKey(googleUser.email) : '';
+  const meus = meusIds(Object.keys(tarefasCache));
+  const feitasIds = meus.filter(function(id){ return execDe(id); });
+  const val = validacoesCache[ek];
+  const hora = new Date(val && val.timestamp ? val.timestamp : Date.now()).toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'});
+  let texto = '✅ *CHECKLIST CONCLUÍDO*\n🏠 '+unidadeAtiva+'\n'+(turnoSel==='dia'?'☀️ Turno Dia':'🌙 Turno Noite')+' · '+formatarDataBR(dataOperacional())+'\n👤 '+googleUser.nome+'\n📋 '+feitasIds.length+'/'+meus.length+' tarefas · validado às '+hora;
+  if(feitasIds.length){
+    texto += '\n\n*Tarefas realizadas:*\n' + feitasIds.map(function(id){ return '✔ '+(tarefasCache[id] ? tarefasCache[id].nome : id); }).join('\n');
+  }
+  if(_tarefaFotoReq && _fotoGrande) texto += '\n\n📸 Foto: '+(_tarefaFotoReq.tarefaNome||'');
+  let file = null;
+  if(_fotoGrande){ try{ const blob = await (await fetch(_fotoGrande)).blob(); file = new File([blob], 'tarefa.jpg', {type:'image/jpeg'}); }catch(e){ file = null; } }
+  try{
+    if(navigator.share && /Android|iPhone|iPad|iPod/i.test(navigator.userAgent)){
+      const dados = { text:texto, title:'Checklist concluído' };
+      if(file && navigator.canShare && navigator.canShare({files:[file]})) dados.files = [file];
+      await navigator.share(dados); return;
+    }
+  }catch(e){ if(e && e.name==='AbortError') return; }
+  window.open('https://wa.me/?text='+encodeURIComponent(texto),'_blank');
+  showToast(file ? 'Abra o grupo e envie. A foto só vai junto pelo celular.' : 'Abra o grupo e envie a mensagem.');
 }
 
 function adicionarSlotFolga(turno){
