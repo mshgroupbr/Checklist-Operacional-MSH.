@@ -443,7 +443,7 @@ body.desk #colab-lista{display:grid;grid-template-columns:repeat(auto-fill,minma
           <input type="date" id="folga-data" onchange="carregarFolgasGer()">
         </div>
       </div>
-      <div class="card">
+      <div class="card"><div style="font-weight:700;font-size:12.5px;margin-bottom:8px;color:var(--muted);text-transform:uppercase">📥 Escala do Gestão Masha</div><p style="font-size:12.5px;color:var(--muted);margin:0 0 10px">Importa as folgas do mês do dia selecionado, geradas na escala de folgas do Gestão Masha. As tarefas vão para o substituto fixo de cada colaborador.</p><button class="btn btn-outline" style="width:100%;justify-content:center" onclick="importarEscalaGestao()">📥 Importar escala de folgas do Gestão Masha</button><div id="folga-import-msg" style="font-size:12.5px;margin-top:8px;color:var(--muted)"></div></div><div class="card"><div style="font-weight:700;font-size:12.5px;margin-bottom:8px;color:var(--muted);text-transform:uppercase">🔁 Substituto fixo</div><p style="font-size:12.5px;color:var(--muted);margin:0 0 10px">Quem faz as tarefas de cada colaborador quando ele está de folga.</p><div id="subfixo-lista"></div></div><div class="card">
         <div style="font-weight:700;font-size:12.5px;margin-bottom:8px;color:var(--muted);text-transform:uppercase">☀️ Folga — Turno Dia</div>
         <div id="folga-lista-dia"></div>
         <button class="btn btn-outline" style="width:100%;margin-top:8px;justify-content:center" onclick="adicionarSlotFolga('dia')">+ Adicionar colaborador de folga</button>
@@ -1618,7 +1618,7 @@ async function carregarFolgasGer(){
   folgaColabsCache=cSnap.exists()?Object.values(cSnap.val()).filter(c=>c && typeof c==='object' && c.unidade===unidadeAtiva && c.ativo!==false):[];
   const folgas=fSnap.exists()?fSnap.val():{};
   renderFolgaSecao('dia', folgas.dia||{});
-  renderFolgaSecao('noite', folgas.noite||{});
+  renderFolgaSecao('noite', folgas.noite||{}); carregarSubFixos();
 }
 function renderFolgaSecao(turno, entradasObj){
   const con=document.getElementById('folga-lista-'+turno);
@@ -1655,7 +1655,7 @@ async function onMudaFolgaSlot(turno,selectEl){
   const row=selectEl.closest('.list-row');
   const selects=row.querySelectorAll('select');
   const colabEmail=selects[0].value;
-  const subEmail=selects[1].value;
+  let subEmail=selects[1].value; if(colabEmail && !subEmail){ const _f=(window.subFixoCache||{})[emailKey(colabEmail)]; if(_f && _f.substitutoEmail){ selects[1].value=_f.substitutoEmail; subEmail=_f.substitutoEmail; } }
   const originalKey=row.getAttribute('data-key')||'';
   const uk=unidadeKey(unidadeAtiva);
   const data=document.getElementById('folga-data').value || dataOperacional();
@@ -1688,6 +1688,103 @@ async function removerFolga(turno,key){
   showToast('✅ Folga removida.');
   await carregarFolgasGer();
 }
+
+var subFixoCache = {};
+function _ckEsc(s){ return String(s==null?'':s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];}); }
+function _ckNorm(s){ return String(s||'').normalize('NFD').replace(/[̀-ͯ]/g,'').toLowerCase().replace(/\s+/g,' ').trim(); }
+async function carregarSubFixos(){
+  const uk = unidadeKey(unidadeAtiva);
+  const snap = await db.ref('/folgas_sub_fixo/'+uk).get();
+  subFixoCache = snap.exists() ? snap.val() : {};
+  window.subFixoCache = subFixoCache;
+  renderSubFixos();
+}
+function renderSubFixos(){
+  const con = document.getElementById('subfixo-lista'); if(!con) return;
+  if(!folgaColabsCache.length){ con.innerHTML = '<p style="color:var(--muted);font-size:13px">Nenhum colaborador ativo cadastrado nessa unidade.</p>'; return; }
+  const lista = folgaColabsCache.slice().sort(function(a,b){ return String(a.nome||'').localeCompare(String(b.nome||'')); });
+  con.innerHTML = lista.map(function(c){
+    const f = subFixoCache[emailKey(c.email)];
+    const atual = f ? f.substitutoEmail : '';
+    const opts = '<option value="">Sem substituto fixo</option>' + lista.filter(function(o){ return o.email !== c.email; }).map(function(o){
+      return '<option value="'+_ckEsc(o.email)+'"'+(o.email===atual?' selected':'')+'>'+_ckEsc(o.nome||o.email)+'</option>';
+    }).join('');
+    return '<div class="list-row" style="flex-wrap:wrap;gap:8px"><div style="flex:1;min-width:140px;font-size:13.5px;font-weight:600">'+_ckEsc(c.nome||c.email)+'</div><div class="fld" style="margin:0;flex:1;min-width:160px"><select onchange="salvarSubFixo(\''+_ckEsc(c.email)+'\',this.value)">'+opts+'</select></div></div>';
+  }).join('');
+}
+async function salvarSubFixo(email, subEmail){
+  const uk = unidadeKey(unidadeAtiva); const k = emailKey(email);
+  if(!subEmail){
+    await db.ref('/folgas_sub_fixo/'+uk+'/'+k).remove(); delete subFixoCache[k];
+    showToast('✅ Substituto fixo removido.'); return;
+  }
+  const c = folgaColabsCache.find(function(x){ return x.email===email; });
+  const s = folgaColabsCache.find(function(x){ return x.email===subEmail; });
+  const obj = { nome: c?c.nome:email, email: email, substitutoEmail: subEmail, substitutoNome: s?s.nome:subEmail };
+  await db.ref('/folgas_sub_fixo/'+uk+'/'+k).set(obj); subFixoCache[k] = obj;
+  showToast('✅ '+obj.substitutoNome+' é o substituto fixo de '+obj.nome+'.');
+}
+async function importarEscalaGestao(){
+  const msg = document.getElementById('folga-import-msg');
+  const setMsg = function(t,err){ if(msg){ msg.textContent=t; msg.style.color = err?'#c0392b':'var(--muted)'; } };
+  try{
+    const uk = unidadeKey(unidadeAtiva);
+    const slug = /TEXAS/i.test(unidadeAtiva) ? 'texas' : 'cali';
+    const data = document.getElementById('folga-data').value || dataOperacional();
+    const ym = data.slice(0,7);
+    setMsg('Buscando escala de '+ym+'...');
+    const [gc, gm, ex] = await Promise.all([
+      db.ref('/gestao_escalas/'+slug+'/colaboradores').get(),
+      db.ref('/gestao_escalas/'+slug+'/meses/'+ym).get(),
+      db.ref('/folgas/'+uk).get()
+    ]);
+    if(!gm.exists()){ setMsg('Não há escala salva para '+ym+' no Gestão Masha. Gere e salve lá primeiro.', true); return; }
+    const gcv = gc.val()||{}; const gmv = gm.val()||{}; const exv = ex.exists()?ex.val():{};
+    await carregarSubFixos();
+    const norm = _ckNorm; const cache = folgaColabsCache;
+    const achar = function(nome){
+      const n = norm(nome);
+      let m = cache.filter(function(c){ return norm(c.nome)===n; });
+      if(m.length!==1) m = cache.filter(function(c){ const cn=norm(c.nome); return cn.startsWith(n+' ') || n.startsWith(cn+' '); });
+      return m.length===1 ? m[0] : null;
+    };
+    const semPar = [], semSub = [], ups = {}; let nDias = 0, nColab = 0, conflitos = 0;
+    const folgasDe = {};
+    Object.keys(gmv.folgas||{}).forEach(function(id){ const v = gmv.folgas[id]; folgasDe[id] = Array.isArray(v) ? v : Object.values(v||{}); });
+    const offPorDia = {};
+    Object.keys(folgasDe).forEach(function(id){ folgasDe[id].forEach(function(d){ (offPorDia[d]=offPorDia[d]||{})[id]=1; }); });
+    Object.keys(folgasDe).forEach(function(id){
+      const g = gcv[id]; if(!g) return;
+      const c = achar(g.nome);
+      if(!c){ semPar.push(g.nome); return; }
+      const f = subFixoCache[emailKey(c.email)];
+      if(!f || !f.substitutoEmail){ semSub.push(c.nome); return; }
+      nColab++;
+      const turno = g.turno==='Noite' ? 'noite' : 'dia';
+      folgasDe[id].forEach(function(d){
+        const k = emailKey(c.email);
+        const atual = (((exv[d]||{})[turno]||{})[k]);
+        if(atual && atual.substitutoEmail) return; // mantém o que já foi lançado
+        ups['/folgas/'+uk+'/'+d+'/'+turno+'/'+k] = { nome:c.nome, email:c.email, substitutoEmail:f.substitutoEmail, substitutoNome:f.substitutoNome, criadoEm:Date.now(), origem:'gestao' };
+        nDias++;
+        const subG = Object.keys(gcv).find(function(x){ const sc = achar(gcv[x].nome); return sc && sc.email===f.substitutoEmail; });
+        if(subG && offPorDia[d] && offPorDia[d][subG]) conflitos++;
+      });
+    });
+    if(!nDias){ setMsg('Nada para importar.'+(semSub.length?' Defina o substituto fixo de: '+semSub.join(', ')+'.':'')+(semPar.length?' Sem correspondência: '+semPar.join(', ')+'.':''), true); return; }
+    if(!confirm('Importar '+nDias+' folga(s) de '+nColab+' colaborador(es) para '+ym+'?\nFolgas já lançadas à mão com substituto são mantidas.')) { setMsg('Importação cancelada.'); return; }
+    const keys = Object.keys(ups);
+    for(let i=0;i<keys.length;i+=200){ const part = {}; keys.slice(i,i+200).forEach(function(k){ part[k]=ups[k]; }); await db.ref().update(part); }
+    let t = '✅ '+nDias+' folga(s) importada(s) de '+nColab+' colaborador(es).';
+    if(semSub.length) t += ' Sem substituto fixo (não importados): '+semSub.join(', ')+'.';
+    if(semPar.length) t += ' Sem correspondência no app: '+semPar.join(', ')+'.';
+    if(conflitos) t += ' Atenção: '+conflitos+' dia(s) em que o substituto também está de folga.';
+    setMsg(t, !!(semSub.length||semPar.length||conflitos));
+    showToast('✅ Escala importada.');
+    await carregarFolgasGer();
+  }catch(e){ setMsg('Erro ao importar: '+e.message, true); }
+}
+
 function adicionarSlotFolga(turno){
   folgaExtras[turno]=(folgaExtras[turno]||0)+1;
   carregarFolgasGer();
