@@ -1477,7 +1477,7 @@ async function definirResponsavel(turno,taskId,email){
 }
 
 let editingColabKey=null;
-async function carregarColaboradoresGer(){
+async function carregarColaboradoresGer(){ espelharColabsMasha();
   const con=document.getElementById('colab-lista');
   con.innerHTML='<p style="color:var(--muted);font-size:13px">Carregando...</p>';
   const snap=await db.ref('/colaboradores_autorizados').get();
@@ -1618,7 +1618,7 @@ async function carregarFolgasGer(){
   folgaColabsCache=cSnap.exists()?Object.values(cSnap.val()).filter(c=>c && typeof c==='object' && c.unidade===unidadeAtiva && c.ativo!==false):[];
   const folgas=fSnap.exists()?fSnap.val():{};
   renderFolgaSecao('dia', folgas.dia||{});
-  renderFolgaSecao('noite', folgas.noite||{}); carregarSubFixos();
+  renderFolgaSecao('noite', folgas.noite||{}); carregarSubFixos(); espelharColabsMasha();
 }
 function renderFolgaSecao(turno, entradasObj){
   const con=document.getElementById('folga-lista-'+turno);
@@ -1734,8 +1734,8 @@ async function importarEscalaGestao(){
     const ym = data.slice(0,7);
     setMsg('Buscando escala de '+ym+'...');
     const [gc, gm, ex] = await Promise.all([
-      db.ref('/gestao_escalas/'+slug+'/colaboradores').get(),
-      db.ref('/gestao_escalas/'+slug+'/meses/'+ym).get(),
+      dbMasha().ref('/gestao_escalas/'+slug+'/colaboradores').get(),
+      dbMasha().ref('/gestao_escalas/'+slug+'/meses/'+ym).get(),
       db.ref('/folgas/'+uk).get()
     ]);
     if(!gm.exists()){ setMsg('Não há escala salva para '+ym+' no Gestão Masha. Gere e salve lá primeiro.', true); return; }
@@ -1783,6 +1783,40 @@ async function importarEscalaGestao(){
     showToast('✅ Escala importada.');
     await carregarFolgasGer();
   }catch(e){ setMsg('Erro ao importar: '+e.message, true); }
+}
+
+/* Banco do Gestão Masha (segundo Firebase, só pra trocar escala/colaboradores) */
+var _dbMasha = null;
+function dbMasha(){
+  if(!_dbMasha){
+    var app;
+    try{ app = firebase.app('masha'); }
+    catch(e){ app = firebase.initializeApp({ apiKey:'AIzaSyDbdgaIEoKn39cjju2IVP83DdP3c1Og6Oo', authDomain:'cozinha-pro-194a7.firebaseapp.com', databaseURL:'https://cozinha-pro-194a7-default-rtdb.firebaseio.com', projectId:'cozinha-pro-194a7' }, 'masha'); }
+    _dbMasha = app.database();
+  }
+  return _dbMasha;
+}
+/* Espelha nome/setor/turno dos colaboradores ativos (sem e-mail) para o Gestão Masha importar na escala de folgas */
+var _espT = 0;
+async function espelharColabsMasha(){
+  if(Date.now()-_espT < 60000) return; _espT = Date.now();
+  try{
+    const snap = await db.ref('/colaboradores_autorizados').get();
+    if(!snap.exists()) return;
+    const por = { cali: [], texas: [] };
+    Object.values(snap.val()).forEach(function(c){
+      if(!c || typeof c!=='object' || c.ativo===false || !c.nome) return;
+      const slug = /TEXAS/i.test(c.unidade||'') ? 'texas' : (/CALI/i.test(c.unidade||'') ? 'cali' : null);
+      if(!slug) return;
+      por[slug].push({ nome:c.nome, setor:c.setor||'', turno:c.turno||'ambos' });
+    });
+    const upd = {};
+    ['cali','texas'].forEach(function(s){
+      upd['/gestao_escalas_fonte/'+s+'/colaboradores_checklist'] = por[s];
+      upd['/gestao_escalas_fonte/'+s+'/atualizadoEm'] = Date.now();
+    });
+    await dbMasha().ref().update(upd);
+  }catch(e){ console.warn('espelho de colaboradores falhou', e); }
 }
 
 function adicionarSlotFolga(turno){
