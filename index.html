@@ -603,13 +603,32 @@ let _geoWatchdog=null; // timeout manual — cobre navegadores que travam sem nu
 let _camStream=null;
 
 /* ── LOGIN GOOGLE ─────────────────────────────── */
+function mostrarLoginAlternativo(){
+  var b=document.getElementById('login-alt');
+  if(!b){
+    b=document.createElement('div'); b.id='login-alt'; b.style.cssText='margin-top:12px;font-size:13px;line-height:1.5';
+    b.innerHTML='<p style="margin:0 0 8px"><b>Deu erro no login?</b> Isso acontece quando o link foi aberto dentro do WhatsApp (ou de outro app) ou o navegador bloqueou o login. Abra o link direto no <b>Safari</b> (iPhone) ou no <b>Chrome</b> (Android), fora do modo privado, e tente de novo.</p><button class="btn btn-outline btn-block" onclick="entrarComGoogleRedirect()">Tentar de outro jeito</button><button class="btn btn-outline btn-block" style="margin-top:8px" onclick="copiarLinkApp()">📋 Copiar link para abrir no navegador</button>';
+    var er=document.getElementById('login-erro'); if(er&&er.parentNode) er.parentNode.insertBefore(b,er.nextSibling);
+  }
+  b.style.display='block';
+}
+async function entrarComGoogleRedirect(){
+  try{ await firebase.auth().signInWithRedirect(authProvider); }
+  catch(e){ var er=document.getElementById('login-erro'); if(er){ er.textContent='Erro ao entrar: '+e.message; er.style.display='block'; } }
+}
+function copiarLinkApp(){
+  var url=location.href.split('?')[0].split('#')[0];
+  if(navigator.clipboard&&navigator.clipboard.writeText){ navigator.clipboard.writeText(url).then(function(){ showToast('Link copiado. Cole no Safari ou no Chrome.'); }).catch(function(){ prompt('Copie o link e abra no navegador:',url); }); }
+  else { prompt('Copie o link e abra no navegador:',url); }
+}
+window.addEventListener('load',function(){ try{ firebase.auth().getRedirectResult().catch(function(e){ var er=document.getElementById('login-erro'); if(er){ er.textContent='Erro ao entrar: '+e.message; er.style.display='block'; } mostrarLoginAlternativo(); }); }catch(e){} });
 async function entrarComGoogle(){
   document.getElementById('login-erro').style.display='none';
   try{
     const result = await firebase.auth().signInWithPopup(authProvider);
     await processarLoginGoogle(result.user);
   }catch(err){
-    document.getElementById('login-erro').textContent='Erro ao entrar: '+err.message;
+    document.getElementById('login-erro').textContent='Erro ao entrar: '+err.message; mostrarLoginAlternativo();
     document.getElementById('login-erro').style.display='block';
   }
 }
